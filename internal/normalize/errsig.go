@@ -84,6 +84,31 @@ func IsSoftFailure(output string) bool {
 	return false
 }
 
+// SoftFailureMarkers returns the failure markers in output, in marker-list
+// order, and the line holding the first one found in the text.
+func SoftFailureMarkers(output string) (markers []string, line string) {
+	first := -1
+	for _, m := range softFailureMarkers {
+		i := strings.Index(output, m)
+		if i < 0 {
+			continue
+		}
+		markers = append(markers, m)
+		if first < 0 || i < first {
+			first = i
+		}
+	}
+	if first >= 0 {
+		start := strings.LastIndexByte(output[:first], '\n') + 1
+		end := strings.IndexByte(output[first:], '\n')
+		if end < 0 {
+			end = len(output) - first
+		}
+		line = output[start : first+end]
+	}
+	return markers, line
+}
+
 // Signature computes the error signature of a failed call's output.
 func Signature(output string) *event.ErrorSignature {
 	if len(output) > TailSize {
