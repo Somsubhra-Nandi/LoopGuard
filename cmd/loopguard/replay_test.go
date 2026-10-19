@@ -61,6 +61,30 @@ func TestReplayJSON(t *testing.T) {
 	}
 }
 
+func TestReplayNearMissesAndSoftFailures(t *testing.T) {
+	root := synthetic(t)
+	out, errOut, code := runCLI(t, "", "replay", "--path", root, "--since", "all", "--near-misses", "--soft-failures")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	for _, want := range []string{"Failures by command family", "Longest same-family failure streak", "Near misses (", "Soft failures ("} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	out, errOut, code = runCLI(t, "", "replay", "--path", root, "--since", "all", "--near-misses=1", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	var r replay.Report
+	if err := json.Unmarshal([]byte(out), &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.NearMisses == nil || len(*r.NearMisses) > 1 || r.SoftFailures != nil || len(r.FailureStreaks) == 0 {
+		t.Errorf("json: near=%v soft=%v streaks=%d", r.NearMisses, r.SoftFailures, len(r.FailureStreaks))
+	}
+}
+
 func TestReplayFlags(t *testing.T) {
 	root := synthetic(t)
 	for _, args := range [][]string{

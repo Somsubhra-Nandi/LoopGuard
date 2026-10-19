@@ -29,6 +29,8 @@ type replayFlags struct {
 	export  string
 	out     string
 	workers int
+	near    int
+	soft    bool
 }
 
 func newReplayCmd() *cobra.Command {
@@ -47,6 +49,8 @@ Nothing leaves your machine.`,
   loopguard replay --json --top -1 > loops.json
   loopguard replay --label
   loopguard replay --session 1d3a0fe0 --calls
+  loopguard replay --near-misses          # the 10 stretches closest to a detection
+  loopguard replay --near-misses=25 --soft-failures
   loopguard replay --export-anonymized 1d3a0fe0 --out session.jsonl`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return runReplay(cmd, f) },
@@ -64,6 +68,9 @@ Nothing leaves your machine.`,
 	fl.StringVar(&f.export, "export-anonymized", "", "write an anonymized copy of this session (id or id prefix)")
 	fl.StringVar(&f.out, "out", "", "output file for --export-anonymized")
 	fl.IntVar(&f.workers, "workers", 0, "sessions replayed in parallel (default: number of CPUs)")
+	fl.IntVar(&f.near, "near-misses", 0, "list the stretches that came closest to a detection without firing (--near-misses alone: 10; --near-misses=N; -1: all)")
+	fl.Lookup("near-misses").NoOptDefVal = "10"
+	fl.BoolVar(&f.soft, "soft-failures", false, "list calls counted as soft failures (exit 0 + failure marker), with counts per marker")
 	return cmd
 }
 
@@ -103,10 +110,13 @@ func runReplay(cmd *cobra.Command, f replayFlags) error {
 		return writeCalls(out, res)
 	case f.label:
 		return runLabel(cmd, res, f.labels)
-	case f.json:
-		return replay.NewReport(res, path, since, f.top, now(), elapsed).WriteJSON(out)
 	}
-	return replay.NewReport(res, path, since, f.top, now(), elapsed).WriteText(out)
+	ropts := replay.ReportOptions{Top: f.top, NearMisses: f.near, SoftFailures: f.soft}
+	report := replay.NewReport(res, path, since, ropts, now(), elapsed)
+	if f.json {
+		return report.WriteJSON(out)
+	}
+	return report.WriteText(out)
 }
 
 // parseSince parses "30d", "12h", "2w", "90m", Go durations, or "all"/"0".
