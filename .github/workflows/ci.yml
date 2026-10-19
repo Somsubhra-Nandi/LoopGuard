@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Ensure make (Windows)
+        if: runner.os == 'Windows'
+        run: command -v make || choco install make --no-progress -y
+
+      - name: gofmt
+        run: make fmt-check
+
+      - name: go vet
+        run: make vet
+
+      - name: staticcheck
+        run: make staticcheck
+
+      - name: go test -race
+        run: make test
+
+      - name: build
+        run: make build
