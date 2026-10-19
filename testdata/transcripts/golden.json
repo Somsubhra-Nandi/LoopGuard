@@ -1,0 +1,46 @@
+{
+  "report": {
+    "schema_version": 1,
+    "generated_at": "1970-01-01T00:00:00Z",
+    "path": "testdata/transcripts",
+    "since": null,
+    "sessions_scanned": 3,
+    "streams_scanned": 3,
+    "tool_calls": 871,
+    "sessions_with_loops": 0,
+    "total_loops": 0,
+    "loops_by_detector": {},
+    "below_threshold_signals": 0,
+    "wasted_seconds": 0,
+    "wasted_tool_calls": 0,
+    "lines": {
+      "lines": 1765,
+      "malformed": 0,
+      "ignored": 0,
+      "tool_uses": 871,
+      "tool_results": 871,
+      "unjoined_results": 0,
+      "prompts": 23
+    },
+    "errors": [],
+    "top_loops": null,
+    "elapsed_seconds": 0
+  },
+  "streams": [
+    {
+      "stream": "anon-4ad678ac",
+      "tool_calls": 137,
+      "failed_calls": 12
+    },
+    {
+      "stream": "anon-98cddc20",
+      "tool_calls": 260,
+      "failed_calls": 10
+    },
+    {
+      "stream": "anon-fd1e580b",
+      "tool_calls": 474,
+      "failed_calls": 31
+    }
+  ]
+}
