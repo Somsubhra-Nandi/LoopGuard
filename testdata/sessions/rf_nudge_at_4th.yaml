@@ -1,0 +1,12 @@
+name: the same jest failure 4 times with edits in between -> D2 fires at the 4th, nudge recorded
+steps:
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_1.txt}       # 1
+  - {edit: src/cart.js, old: "+ 1;", new: "+ 0;"}                             # 2
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_2.txt}       # 3
+  - {edit: src/cart.js, old: "+ 0;", new: "- 0;"}                             # 4
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_shifted.txt} # 5: line numbers moved
+  - {edit: src/cart.js, old: "- 0;", new: ";"}                                # 6
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_1.txt}       # 7
+expect:
+  signals: ["7:repeated_failure"]
+  decisions: ["7:nudge"]

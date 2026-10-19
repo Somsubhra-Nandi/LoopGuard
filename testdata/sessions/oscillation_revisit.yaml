@@ -1,0 +1,9 @@
+name: same file written to content hash H1, H2, H1, H2 -> D3 (state revisit) fires
+steps:
+  - {write: src/schema.sql, hash: H1}   # 1
+  - {write: src/schema.sql, hash: H2}   # 2
+  - {write: src/schema.sql, hash: H1}   # 3: revisits 1 (one revisit)
+  - {write: src/schema.sql, hash: H2}   # 4: revisits 2 (two revisits)
+expect:
+  signals: ["4:oscillation"]
+  decisions: ["4:nudge"]

@@ -1,0 +1,18 @@
+name: cooldown - no second nudge for the same loop within 10 calls
+steps:
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_1.txt}       # 1
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_2.txt}       # 2
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_shifted.txt} # 3
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_1.txt}       # 4: D2 -> nudge
+  - {bash: npx jest, result: ok, text: "Tests: 6 passed, 6 total"}            # 5: success, the loop resets
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_2.txt}       # 6
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_shifted.txt} # 7
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_1.txt}       # 8: D1 (3x identical output, sev 0.5)
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_2.txt}       # 9: D2 again, same key: cooldown (5 calls)
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_shifted.txt} # 10
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_1.txt}       # 11
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_2.txt}       # 12
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_shifted.txt} # 13: still within 10 calls
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_1.txt}       # 14: 10 calls after the nudge -> allowed
+expect:
+  decisions: ["4:nudge", "14:nudge"]

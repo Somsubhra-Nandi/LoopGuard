@@ -1,0 +1,20 @@
+name: polling - gh run watch and sleep 30 repeated 10x -> no signal
+steps:
+  - repeat: 10
+    steps:
+      - bash: gh run watch 9876543210
+        result: fail
+        text: "X build failed\nRun CI (9876543210) has already completed with 'failure'"
+      - {bash: sleep 30, result: ok}
+  - repeat: 10
+    steps:
+      - bash: gh pr checks --watch
+        text: "Some checks are still pending\n0 failing, 3 successful, 1 pending"
+      - bash: kubectl get pods -w
+        text: "NAME READY STATUS\napi-7d4b 0/1 Pending"
+      - bash: curl -s localhost:8080/health
+        result: fail
+        text: "curl: (7) Failed to connect to localhost port 8080: Connection refused"
+expect:
+  signals: []
+  decisions: []

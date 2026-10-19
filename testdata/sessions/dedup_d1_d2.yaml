@@ -1,0 +1,10 @@
+name: the identical failing command 4x with no edits -> D1 and D2 both fire at the 4th; only D2 is kept
+steps:
+  - repeat: 4
+    steps:
+      - {bash: cargo test, result: fail, output: cargo/add_fail_2.txt}
+expect:
+  # Call 3: D1 alone (3 identical calls, severity 0.5, below the nudge threshold).
+  # Call 4: D1 (0.65) and D2 (0.55) on the same calls -> one D2 signal with severity 0.65.
+  signals: ["3:exact_repeat", "4:repeated_failure"]
+  decisions: ["4:nudge"]

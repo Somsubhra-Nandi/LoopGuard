@@ -1,0 +1,25 @@
+FAIL ./cart.test.js
+  ● cart › total sums price * qty
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 7
+    Received: 14
+
+    [0m [90m  6 |[39m describe([32m'cart'[39m[33m,[39m () [33m=>[39m {
+     [90m  7 |[39m   test([32m'total sums price * qty'[39m[33m,[39m () [33m=>[39m {
+    [31m[1m>[22m[39m[90m  8 |[39m     expect(total([{ price[33m:[39m [35m2[39m[33m,[39m qty[33m:[39m [35m3[39m }[33m,[39m { price[33m:[39m [35m1[39m[33m,[39m qty[33m:[39m [35m1[39m }]))[33m.[39mtoBe([35m7[39m)[33m;[39m
+     [90m    |[39m                                                                 [31m[1m^[22m[39m
+     [90m  9 |[39m   })[33m;[39m
+     [90m 10 |[39m   test([32m'discount applies a percentage'[39m[33m,[39m () [33m=>[39m {
+     [90m 11 |[39m     expect(discount([35m100[39m[33m,[39m [35m0.1[39m))[33m.[39mtoBe([35m90[39m)[33m;[39m[0m
+
+      at Object.toBe (cart.test.js:8:65)
+
+PASS ./util.test.js
+
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       1 failed, 5 passed, 6 total
+Snapshots:   0 total
+Time:        1.035 s
+Ran all test suites.

@@ -1,0 +1,25 @@
+FAIL ./cart.test.js
+  ● cart › tax is 20%
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 2
+    Received: 2.5
+
+    [0m [90m 12 |[39m   })[33m;[39m
+     [90m 13 |[39m   test([32m'tax is 20%'[39m[33m,[39m () [33m=>[39m {
+    [31m[1m>[22m[39m[90m 14 |[39m     expect(tax([35m10[39m))[33m.[39mtoBe([35m2[39m)[33m;[39m
+     [90m    |[39m                     [31m[1m^[22m[39m
+     [90m 15 |[39m   })[33m;[39m
+     [90m 16 |[39m   test([32m'empty cart is zero'[39m[33m,[39m () [33m=>[39m {
+     [90m 17 |[39m     expect(total([]))[33m.[39mtoBe([35m0[39m)[33m;[39m[0m
+
+      at Object.toBe (cart.test.js:14:21)
+
+PASS ./util.test.js
+
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       1 failed, 5 passed, 6 total
+Snapshots:   0 total
+Time:        1.029 s
+Ran all test suites.

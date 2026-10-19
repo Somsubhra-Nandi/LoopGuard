@@ -1,0 +1,5 @@
+--- FAIL: TestAdd (0.00s)
+    calc_test.go:7: Add(-4, 2) = -1, want -2
+FAIL
+FAIL	example.com/gocalc	1.859s
+FAIL

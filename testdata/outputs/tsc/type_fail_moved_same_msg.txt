@@ -1,0 +1,1 @@
+src/a.ts(5,3): error TS2322: Type 'string' is not assignable to type 'number'.

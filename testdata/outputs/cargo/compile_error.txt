@@ -1,0 +1,16 @@
+   Compiling calc v0.1.0 (C:\Users\dev\calc)
+error[E0308]: mismatched types
+ --> src\lib.rs:2:5
+  |
+1 | pub fn add(a: i32, b: i32) -> i64 {
+  |                               --- expected `i64` because of return type
+2 |     a + b
+  |     ^^^^^ expected `i64`, found `i32`
+  |
+help: you can convert an `i32` to an `i64`
+  |
+2 |     (a + b).into()
+  |     +     ++++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `calc` (lib) due to 1 previous error

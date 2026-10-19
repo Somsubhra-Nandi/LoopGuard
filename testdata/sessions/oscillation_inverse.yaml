@@ -1,0 +1,9 @@
+name: edit A->B, B->A, A->B, B->A on one file -> D3 (inverse edits) fires
+steps:
+  - {edit: src/config.ts, old: "retries: 3", new: "retries: 5"}   # 1
+  - {edit: src/config.ts, old: "retries: 5", new: "retries: 3"}   # 2: undoes 1
+  - {edit: src/config.ts, old: "retries: 3", new: "retries: 5"}   # 3: undoes 2 -> 2 inverse edits
+  - {edit: src/config.ts, old: "retries: 5", new: "retries: 3"}   # 4: 3 inverse edits
+expect:
+  signals: ["3:oscillation", "4:oscillation"]
+  decisions: ["3:nudge"]

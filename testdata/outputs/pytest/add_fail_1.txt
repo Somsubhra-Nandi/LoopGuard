@@ -1,0 +1,23 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.4, pytest-8.3.2, pluggy-1.5.0
+rootdir: C:\Users\dev\proj
+configfile: pyproject.toml
+collected 5 items
+
+tests\test_calc.py F....                                                  [100%]
+
+================================== FAILURES ===================================
+_________________________________ test_add __________________________________
+
+tmp_path = WindowsPath('C:/Users/dev/AppData/Local/Temp/pytest-of-dev/pytest-41/test_add0')
+
+    def test_add(tmp_path):
+        (tmp_path / "in.txt").write_text("1 2")
+>       assert add(1, 2) == 3
+E       assert 4 == 3
+E        +  where 4 = add(1, 2)
+
+tests\test_calc.py:14: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_calc.py::test_add - assert 4 == 3
+========================= 1 failed, 4 passed in 0.12s ==========================

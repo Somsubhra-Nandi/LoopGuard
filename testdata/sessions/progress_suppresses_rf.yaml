@@ -1,0 +1,11 @@
+name: same error 4x, but the agent works across several new files -> progress >= 1.0, no D2
+steps:
+  - {bash: go test ./..., result: fail, output: gotest/add_fail_1.txt}
+  - {edit: calc.go, old: "a", new: "b"}
+  - {bash: go test ./..., result: fail, output: gotest/add_fail_2.txt}
+  - {edit: parse.go, old: "a", new: "b"}
+  - {bash: go test ./..., result: fail, output: gotest/add_fail_shifted.txt}
+  - {edit: format.go, old: "a", new: "b"}
+  - {bash: go test ./..., result: fail, output: gotest/add_fail_1.txt}
+expect:
+  signals: []

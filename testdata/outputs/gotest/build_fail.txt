@@ -1,0 +1,4 @@
+# example.com/gocalc [example.com/gocalc.test]
+.\calc.go:3:37: undefined: c
+FAIL	example.com/gocalc [build failed]
+FAIL

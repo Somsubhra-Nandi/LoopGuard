@@ -1,0 +1,14 @@
+name: flaky test - fail, fail, pass, fail, fail -> no D2, the success resets it
+steps:
+  - {bash: pytest, result: fail, output: pytest/add_fail_1.txt}
+  - {edit: tests/conftest.py, old: "timeout=1", new: "timeout=2"}
+  - {bash: pytest, result: fail, output: pytest/add_fail_2.txt}
+  - {edit: tests/conftest.py, old: "timeout=2", new: "timeout=3"}
+  - {bash: pytest, result: ok, text: "5 passed in 0.10s"}
+  - {edit: tests/conftest.py, old: "timeout=3", new: "timeout=4"}
+  - {bash: pytest, result: fail, output: pytest/add_fail_1.txt}
+  - {edit: tests/conftest.py, old: "timeout=4", new: "timeout=5"}
+  - {bash: pytest, result: fail, output: pytest/add_fail_2.txt}
+expect:
+  signals: []
+  never: [repeated_failure]

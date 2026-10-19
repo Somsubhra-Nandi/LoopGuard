@@ -1,0 +1,18 @@
+name: permission mode "default" (a human approves) needs one more occurrence before deny
+perm_mode: default
+steps:
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_1.txt}       # 1
+  - {edit: src/cart.js, old: "a1", new: "a2"}                                 # 2
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_2.txt}       # 3
+  - {edit: src/cart.js, old: "a2", new: "a3"}                                 # 4
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_shifted.txt} # 5
+  - {edit: src/cart.js, old: "a3", new: "a4"}                                 # 6
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_1.txt}       # 7: nudge
+  - repeat: 4
+    steps:
+      - {edit: src/cart.js, old: "x", new: "y"}
+      - {bash: npx jest, result: fail, output: jest/cart_total_fail_2.txt}   # 9, 11, 13, 15: the 4th arms deny
+  - {edit: src/cart.js, old: "y", new: "z"}                                   # 16
+  - {bash: npx jest, result: fail, output: jest/cart_total_fail_1.txt}       # 17: would deny
+expect:
+  decisions: ["7:nudge", "17:deny"]

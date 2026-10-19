@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "C:\Users\dev\proj\app\main.py", line 3, in <module>
+    from app.settings import DATABASE_URL
+  File "C:\Users\dev\proj\app\settings.py", line 7, in <module>
+    DATABASE_URL = os.environ["DATABASE_URL"]
+                   ~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'DATABASE_URL'

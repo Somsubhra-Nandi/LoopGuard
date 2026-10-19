@@ -1,0 +1,12 @@
+name: edits with known file content flip it back and forth -> both D3 variants agree, one signal per call
+files:
+  src/flags.ts: "export const useCache = true;\n"
+steps:
+  - {edit: src/flags.ts, old: "true", new: "false"}   # 1
+  - {edit: src/flags.ts, old: "false", new: "true"}   # 2
+  - {edit: src/flags.ts, old: "true", new: "false"}   # 3: inverse x2, content revisit x1
+  - {edit: src/flags.ts, old: "false", new: "true"}   # 4: inverse x3, content revisit x2
+  - {edit: src/flags.ts, old: "nope", new: "x"}       # 5: fails (old string not found)
+expect:
+  signals: ["3:oscillation", "4:oscillation"]
+  decisions: ["3:nudge"]

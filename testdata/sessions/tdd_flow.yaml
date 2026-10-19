@@ -1,0 +1,14 @@
+name: TDD flow - go test fails with a different error each time -> no signal
+steps:
+  - {bash: go test ./..., result: fail, output: gotest/add_fail_1.txt}
+  - {edit: calc.go, old: "+ 1", new: ""}
+  - {bash: go test ./..., result: fail, output: gotest/add_fail_other_assert.txt}
+  - {edit: calc_test.go, old: "-4", new: "-3"}
+  - {bash: go test ./..., result: fail, output: gotest/sub_fail.txt}
+  - {edit: calc.go, old: "b - a", new: "a - c"}
+  - {bash: go test ./..., result: fail, output: gotest/build_fail.txt}
+  - {edit: calc.go, old: "a - c", new: "a - b"}
+  - {bash: go test ./..., result: ok, text: "ok  \texample.com/gocalc\t0.412s"}
+expect:
+  signals: []
+  decisions: []

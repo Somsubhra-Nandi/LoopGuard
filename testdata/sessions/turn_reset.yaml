@@ -1,0 +1,19 @@
+name: a human prompt in the middle resets detector windows
+steps:
+  - {bash: npm test, result: fail, output: jest/cart_total_fail_1.txt}   # 1
+  - {edit: src/cart.js, old: "a", new: "b"}                               # 2
+  - {bash: npm test, result: fail, output: jest/cart_total_fail_2.txt}   # 3
+  - {edit: src/cart.js, old: "b", new: "c"}                               # 4
+  - {bash: npm test, result: fail, output: jest/cart_total_fail_1.txt}   # 5
+  - prompt: the discount logic changed upstream, please re-check
+  - {edit: src/cart.js, old: "c", new: "d"}                               # 6
+  - {bash: npm test, result: fail, output: jest/cart_total_fail_2.txt}   # 7: 4th overall, 1st this turn
+  - {edit: src/cart.js, old: "d", new: "e"}                               # 8
+  - {bash: npm test, result: fail, output: jest/cart_total_fail_1.txt}   # 9
+  - {edit: src/cart.js, old: "e", new: "f"}                               # 10
+  - {bash: npm test, result: fail, output: jest/cart_total_fail_2.txt}   # 11
+  - {edit: src/cart.js, old: "f", new: "g"}                               # 12
+  - {bash: npm test, result: fail, output: jest/cart_total_fail_1.txt}   # 13: 4th this turn
+expect:
+  signals: ["13:repeated_failure"]
+  decisions: ["13:nudge"]
