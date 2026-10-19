@@ -10,8 +10,17 @@ LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.dat
 
 ifeq ($(OS),Windows_NT)
 EXE := .exe
+# The race detector needs cgo and a C toolchain, which Windows machines
+# often lack. RACE=1 turns it on; CI runs it on Linux and macOS.
+RACE ?= 0
+else
+RACE ?= 1
 endif
 BIN := bin/loopguard$(EXE)
+
+ifeq ($(RACE),1)
+RACEFLAG := -race
+endif
 
 .PHONY: all build test lint vet staticcheck fmt fmt-check tidy clean
 
@@ -21,7 +30,7 @@ build:
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/loopguard
 
 test:
-	$(GO) test -race ./...
+	$(GO) test $(RACEFLAG) ./...
 
 lint: vet staticcheck
 
