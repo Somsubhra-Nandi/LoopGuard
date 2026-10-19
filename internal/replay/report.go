@@ -34,11 +34,34 @@ type Report struct {
 	Errors     []string  `json:"errors"`
 	TopLoops   []*Loop   `json:"top_loops"`
 	ElapsedSec float64   `json:"elapsed_seconds"`
+
+	// The shape of real failures (detection-free).
+	FailureFamilies []FamilyFailures `json:"failure_families"` // top 10 families by failures
+	FailureStreaks  []Streak         `json:"failure_streaks"`  // longest same-family failure streak per stream
+
+	// Only with --near-misses / --soft-failures (absent otherwise, possibly
+	// empty when requested).
+	NearMisses        *[]NearMiss     `json:"near_misses,omitempty"`
+	SoftFailures      *[]SoftFailure  `json:"soft_failures,omitempty"`
+	SoftFailureCounts *map[string]int `json:"soft_failure_markers,omitempty"`
 }
 
-// NewReport builds a report. top limits TopLoops: 0 lists none, a negative
-// number lists all.
-func NewReport(res *Result, path string, since time.Time, top int, now time.Time, elapsed time.Duration) *Report {
+// ReportOptions selects what a report lists.
+type ReportOptions struct {
+	// Top limits TopLoops: 0 lists none, a negative number lists all.
+	Top int
+	// NearMisses lists this many near misses (0: off, negative: all).
+	NearMisses int
+	// SoftFailures lists the soft-failure calls and counts per marker.
+	SoftFailures bool
+}
+
+// topFamilies is how many command families the failure table shows.
+const topFamilies = 10
+
+// NewReport builds a report.
+func NewReport(res *Result, path string, since time.Time, opts ReportOptions, now time.Time, elapsed time.Duration) *Report {
+	top := opts.Top
 	r := &Report{
 		SchemaVersion:     SchemaVersion,
 		GeneratedAt:       now.UTC(),
@@ -72,6 +95,27 @@ func NewReport(res *Result, path string, since time.Time, top int, now time.Time
 		loops = loops[:top]
 	}
 	r.TopLoops = loops
+
+	r.FailureFamilies = []FamilyFailures{}
+	for _, f := range res.Families {
+		if f.Failures > 0 && len(r.FailureFamilies) < topFamilies {
+			r.FailureFamilies = append(r.FailureFamilies, f)
+		}
+	}
+	r.FailureStreaks = append([]Streak{}, res.Streaks...)
+
+	if opts.NearMisses != 0 {
+		ns := append([]NearMiss{}, res.NearMisses...)
+		if opts.NearMisses > 0 && len(ns) > opts.NearMisses {
+			ns = ns[:opts.NearMisses]
+		}
+		r.NearMisses = &ns
+	}
+	if opts.SoftFailures {
+		sf := append([]SoftFailure{}, res.SoftFailures...)
+		counts := MarkerCounts(res.SoftFailures)
+		r.SoftFailures, r.SoftFailureCounts = &sf, &counts
+	}
 	return r
 }
 
@@ -100,20 +144,112 @@ func (r *Report) WriteText(w io.Writer) error {
 	if r.Lines.Malformed > 0 || len(r.Errors) > 0 {
 		p.f("  Skipped              %d malformed lines, %d unreadable files\n", r.Lines.Malformed, len(r.Errors))
 	}
-	if len(r.TopLoops) == 0 {
-		return p.err
-	}
-	p.f("\nTop %d loops\n", len(r.TopLoops))
-	for i, l := range r.TopLoops {
-		p.f("\n%2d. %s · %s · %d× over %s · %s\n", i+1, l.Detector, subject(l), l.Count,
-			humanDuration(l.DurationSeconds), RepoName(l.Repo))
-		p.f("    session %s, calls %d-%d (%d calls)\n", shortStream(l), l.FirstCall, l.LastCall, l.WastedToolCalls)
-		for _, e := range l.ErrorLines {
-			p.f("    │ %s\n", clipText(e, 160))
+	if len(r.TopLoops) > 0 {
+		p.f("\nTop %d loops\n", len(r.TopLoops))
+		for i, l := range r.TopLoops {
+			p.f("\n%2d. %s · %s · %d× over %s · %s\n", i+1, l.Detector, subject(l), l.Count,
+				humanDuration(l.DurationSeconds), RepoName(l.Repo))
+			p.f("    session %s, calls %d-%d (%d calls)\n", shortStream(l), l.FirstCall, l.LastCall, l.WastedToolCalls)
+			for _, e := range l.ErrorLines {
+				p.f("    │ %s\n", clipText(e, 160))
+			}
+			p.f("    LoopGuard would have: %s\n", wouldText(l.WouldHave))
 		}
-		p.f("    LoopGuard would have: %s\n", wouldText(l.WouldHave))
+	}
+	r.writeFailureShape(p)
+	if r.NearMisses != nil {
+		r.writeNearMisses(p)
+	}
+	if r.SoftFailures != nil {
+		r.writeSoftFailures(p)
 	}
 	return p.err
+}
+
+// maxStreakLines caps the per-session streak list in the terminal report.
+const maxStreakLines = 10
+
+func (r *Report) writeFailureShape(p *printer) {
+	if len(r.FailureFamilies) > 0 {
+		p.f("\nFailures by command family (top %d)\n", len(r.FailureFamilies))
+		p.f("  %-36s %8s %6s %6s\n", "family", "failures", "runs", "soft")
+		for _, f := range r.FailureFamilies {
+			name := f.Family
+			if f.Polling {
+				name += " (polling)"
+			}
+			p.f("  %-36s %8d %6d %6d\n", clipText(name, 36), f.Failures, f.Runs, f.Soft)
+		}
+	}
+	if len(r.FailureStreaks) > 0 {
+		p.f("\nLongest same-family failure streak per session (any error, no success in between)\n")
+		for i, s := range r.FailureStreaks {
+			if i == maxStreakLines {
+				p.f("  … %d more sessions\n", len(r.FailureStreaks)-maxStreakLines)
+				break
+			}
+			p.f("  %-22s %3d× `%s`, calls %d-%d, %d distinct errors\n",
+				shortID(s.SessionID, s.AgentID), s.Length, clipText(s.Family, 40), s.FromCall, s.ToCall, s.Errors)
+		}
+	}
+}
+
+func (r *Report) writeNearMisses(p *printer) {
+	ns := *r.NearMisses
+	p.f("\nNear misses (%d): closest to triggering a detector without firing\n", len(ns))
+	if len(ns) == 0 {
+		p.f("  none\n")
+	}
+	for i, n := range ns {
+		p.f("\n%2d. %s · %d/%d · session %s, calls %d-%d · %s\n", i+1, n.Detector, n.Count, n.Threshold,
+			shortID(n.SessionID, n.AgentID), n.FromCall, n.ToCall, RepoName(n.Repo))
+		p.f("    %s\n", n.Reason)
+		for _, e := range n.Evidence {
+			p.f("    │ %s\n", clipText(e, 160))
+		}
+	}
+	if len(ns) > 0 {
+		p.f("\nTo record one as a missed loop: loopguard label missed <session-id> <from-call> <to-call> [note]\n")
+	}
+}
+
+func (r *Report) writeSoftFailures(p *printer) {
+	sf := *r.SoftFailures
+	p.f("\nSoft failures (%d): exit 0, but the output has a failure marker\n", len(sf))
+	if len(sf) == 0 {
+		p.f("  none\n")
+		return
+	}
+	counts := *r.SoftFailureCounts
+	markers := make([]string, 0, len(counts))
+	for m := range counts {
+		markers = append(markers, m)
+	}
+	sort.Slice(markers, func(i, j int) bool {
+		if counts[markers[i]] != counts[markers[j]] {
+			return counts[markers[i]] > counts[markers[j]]
+		}
+		return markers[i] < markers[j]
+	})
+	p.f("  by marker:")
+	for _, m := range markers {
+		p.f("  %q %d", m, counts[m])
+	}
+	p.f("\n\n")
+	for _, s := range sf {
+		p.f("  %-22s call %-4d `%s`  [%s]\n", shortID(s.SessionID, s.AgentID), s.Call, clipText(s.Family, 40), strings.Join(s.Markers, ", "))
+		p.f("    │ %s\n", s.Line)
+	}
+}
+
+func shortID(session, agent string) string {
+	if len(session) > 8 {
+		session = session[:8]
+	}
+	if agent != "" {
+		session += "/" + agent
+	}
+	return session
 }
 
 type printer struct {

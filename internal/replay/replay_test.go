@@ -212,7 +212,7 @@ func TestUnion(t *testing.T) {
 
 func TestReport(t *testing.T) {
 	res := runSynthetic(t)
-	r := NewReport(res, "/x", time.Time{}, 2, time.Unix(0, 0), time.Second)
+	r := NewReport(res, "/x", time.Time{}, ReportOptions{Top: 2}, time.Unix(0, 0), time.Second)
 	if r.TotalLoops != 3 || len(r.TopLoops) != 2 || r.LoopsByDetector[event.DetectorRepeatedFailure] != 2 {
 		t.Errorf("report = %+v", r)
 	}
@@ -241,7 +241,7 @@ func TestReport(t *testing.T) {
 	if strings.Contains(js.String(), replaytest.Secret) || strings.Contains(text.String(), replaytest.Secret) {
 		t.Error("secret in the report")
 	}
-	if r := NewReport(res, "/x", time.Time{}, -1, time.Unix(0, 0), 0); len(r.TopLoops) != 3 {
+	if r := NewReport(res, "/x", time.Time{}, ReportOptions{Top: -1}, time.Unix(0, 0), 0); len(r.TopLoops) != 3 {
 		t.Errorf("top -1 lists %d loops", len(r.TopLoops))
 	}
 }

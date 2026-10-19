@@ -42,7 +42,7 @@ func TestGolden(t *testing.T) {
 		t.Fatal("no transcripts under testdata/transcripts")
 	}
 	res := Run(streams, Options{Thresholds: config.Default(), Timeline: true})
-	g := golden{Report: NewReport(res, "testdata/transcripts", time.Time{}, -1, time.Unix(0, 0), 0)}
+	g := golden{Report: NewReport(res, "testdata/transcripts", time.Time{}, ReportOptions{Top: -1}, time.Unix(0, 0), 0)}
 	for key, calls := range res.Timelines {
 		gs := goldenStream{Stream: key, ToolCalls: len(calls)}
 		for _, c := range calls {

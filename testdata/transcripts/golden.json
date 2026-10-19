@@ -24,7 +24,105 @@
     },
     "errors": [],
     "top_loops": null,
-    "elapsed_seconds": 0
+    "elapsed_seconds": 0,
+    "failure_families": [
+      {
+        "family": "node",
+        "runs": 13,
+        "failures": 5,
+        "soft_failures": 0,
+        "polling": false
+      },
+      {
+        "family": "set-location",
+        "runs": 7,
+        "failures": 5,
+        "soft_failures": 0,
+        "polling": false
+      },
+      {
+        "family": "pytest",
+        "runs": 16,
+        "failures": 4,
+        "soft_failures": 0,
+        "polling": false
+      },
+      {
+        "family": "sed",
+        "runs": 34,
+        "failures": 3,
+        "soft_failures": 0,
+        "polling": false
+      },
+      {
+        "family": "docker logs",
+        "runs": 6,
+        "failures": 2,
+        "soft_failures": 0,
+        "polling": false
+      },
+      {
+        "family": "s=\"\u003ctmp\u003e\";",
+        "runs": 6,
+        "failures": 2,
+        "soft_failures": 0,
+        "polling": false
+      },
+      {
+        "family": "grep",
+        "runs": 111,
+        "failures": 1,
+        "soft_failures": 0,
+        "polling": false
+      },
+      {
+        "family": "s=\"\u003ctmp\u003e\"; cd",
+        "runs": 20,
+        "failures": 1,
+        "soft_failures": 0,
+        "polling": false
+      },
+      {
+        "family": "ls",
+        "runs": 19,
+        "failures": 1,
+        "soft_failures": 0,
+        "polling": true
+      },
+      {
+        "family": "python",
+        "runs": 17,
+        "failures": 1,
+        "soft_failures": 0,
+        "polling": false
+      }
+    ],
+    "failure_streaks": [
+      {
+        "session_id": "anon-4ad678ac",
+        "family": "set-location",
+        "length": 5,
+        "from_call": 125,
+        "to_call": 129,
+        "distinct_errors": 5
+      },
+      {
+        "session_id": "anon-98cddc20",
+        "family": "s=\"\u003ctmp\u003e\";",
+        "length": 2,
+        "from_call": 198,
+        "to_call": 199,
+        "distinct_errors": 2
+      },
+      {
+        "session_id": "anon-fd1e580b",
+        "family": "pytest",
+        "length": 2,
+        "from_call": 96,
+        "to_call": 98,
+        "distinct_errors": 2
+      }
+    ]
   },
   "streams": [
     {
