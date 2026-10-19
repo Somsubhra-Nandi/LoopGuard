@@ -23,8 +23,10 @@ const Project = "C--Users-dev-work-shop"
 // Cwd is the synthetic session's working directory.
 const Cwd = `C:\Users\dev\work\shop`
 
-// Secret is planted in a failing output; it must never come out of replay.
-const Secret = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+// Secret is a fake GitHub token planted in a failing output; it must never
+// come out of replay. It is assembled from pieces so the full token never
+// appears in source (secret scanners).
+const Secret = "gh" + "p_" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
 
 // PromptText is the first prompt; exports must drop it.
 const PromptText = "please make the cart total test pass"
