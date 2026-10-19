@@ -111,6 +111,10 @@ type LoopState struct {
 	ActionFP uint64
 	Family   string
 	Path     string
+	// Anchor is the error signature of a repeated-failure loop. Failures of
+	// Family that match it keep this loop's key for as long as the loop
+	// state lives (until the next human prompt).
+	Anchor *event.ErrorSignature
 
 	StartedAt      time.Time // when the loop's first call happened
 	FirstSeq       uint64
@@ -238,8 +242,8 @@ func (s *SessionState) Family(name string) *FamilyStats {
 // call history, family, error, and file statistics. c.Event.Seq must
 // already be assigned.
 func (s *SessionState) Record(c *event.ToolCall) {
-	c.Progress = s.score(c)
-	s.Progress.Add(c.Seq(), c.Progress)
+	c.Progress, c.FamilyProgress = s.score(c)
+	s.Progress.Record(c.Seq(), c.Progress, c.Family, c.FamilyProgress)
 	s.Calls.Push(c)
 	s.CallCount++
 
@@ -330,13 +334,23 @@ const (
 	scoreNewFamilyOK     = 0.3
 )
 
-// score computes the progress score of c from the state before c. A call
+// score computes the progress score of c from the state before c, and the
+// part of it that is about c's own family (the family recovered, its error
+// changed to a never-seen one, or fewer of its tests fail). Only family
+// progress may reset or suppress a repeated-failure loop; the overall score
+// also counts general activity (new files, new families, todos). A call
 // that matches several rows gets the highest score.
-func (s *SessionState) score(c *event.ToolCall) float64 {
+func (s *SessionState) score(c *event.ToolCall) (overall, family float64) {
 	best := 0.0
 	up := func(v float64) {
 		if v > best {
 			best = v
+		}
+	}
+	upFamily := func(v float64) {
+		up(v)
+		if v > family {
+			family = v
 		}
 	}
 	isBash := c.Event.ToolName == event.ToolBash
@@ -345,13 +359,13 @@ func (s *SessionState) score(c *event.ToolCall) float64 {
 		switch {
 		case c.Failed() && fs != nil:
 			if fs.LastErr != nil && !normalize.SameError(fs.LastErr, c.ErrorSig, s.maxDist) && !s.knownSig(fs, c.ErrorSig) {
-				up(scoreNewErrorSig)
+				upFamily(scoreNewErrorSig)
 			}
 			if c.FailingTests >= 0 && fs.LastFailingTests >= 0 && c.FailingTests < fs.LastFailingTests {
-				up(scoreFewerFailures)
+				upFamily(scoreFewerFailures)
 			}
 		case !c.Failed() && fs != nil && fs.ConsecFails > 0:
-			up(scoreFamilyRecovered)
+			upFamily(scoreFamilyRecovered)
 		case !c.Failed() && fs == nil && isBash:
 			up(scoreNewFamilyOK)
 		}
@@ -374,5 +388,5 @@ func (s *SessionState) score(c *event.ToolCall) float64 {
 			up(scoreTodoCompleted)
 		}
 	}
-	return best
+	return best, family
 }

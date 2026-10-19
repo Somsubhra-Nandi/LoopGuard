@@ -1,11 +1,15 @@
-name: same error 4x, but the agent works across several new files -> progress >= 1.0, no D2
+name: the same error 4x, but the family keeps hitting new errors in between -> family progress >= 1.0, no D2
 steps:
-  - {bash: go test ./..., result: fail, output: gotest/add_fail_1.txt}
-  - {edit: calc.go, old: "a", new: "b"}
-  - {bash: go test ./..., result: fail, output: gotest/add_fail_2.txt}
-  - {edit: parse.go, old: "a", new: "b"}
-  - {bash: go test ./..., result: fail, output: gotest/add_fail_shifted.txt}
-  - {edit: format.go, old: "a", new: "b"}
-  - {bash: go test ./..., result: fail, output: gotest/add_fail_1.txt}
+  - {bash: go test ./..., result: fail, output: gotest/add_fail_1.txt}             # 1: error A
+  - {edit: calc.go, old: "a1", new: "a2"}                                           # 2
+  - {bash: go test ./..., result: fail, output: gotest/add_fail_2.txt}             # 3: A
+  - {edit: calc.go, old: "a2", new: "a3"}                                           # 4
+  - {bash: go test ./..., result: fail, output: gotest/sub_fail.txt}               # 5: new error B (+0.6)
+  - {edit: calc.go, old: "a3", new: "a4"}                                           # 6
+  - {bash: go test ./..., result: fail, output: gotest/add_fail_shifted.txt}       # 7: A
+  - {edit: calc.go, old: "a4", new: "a5"}                                           # 8
+  - {bash: go test ./..., result: fail, output: gotest/build_fail.txt}             # 9: new error C (+0.6)
+  - {edit: calc.go, old: "a5", new: "a6"}                                           # 10
+  - {bash: go test ./..., result: fail, output: gotest/add_fail_1.txt}             # 11: A for the 4th time, but 1.2 family progress since the first
 expect:
   signals: []

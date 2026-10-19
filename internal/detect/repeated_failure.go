@@ -48,8 +48,23 @@ func (d *RepeatedFailure) Observe(s *session.SessionState, c *event.ToolCall) []
 		return nil
 	}
 	first := fails[count-1]
-	if s.Progress.Since(first.Seq()) >= d.MaxProgress {
+	// Only progress of this family counts: it recovering, its error changing
+	// to a never-seen one, or fewer of its tests failing. Edits to new files
+	// and other families succeeding are the "changing things but nothing
+	// changes" this detector exists for.
+	if s.Progress.FamilySince(c.Family, first.Seq()) >= d.MaxProgress {
 		return nil
+	}
+
+	// A loop that already exists keeps its key and anchor for as long as
+	// failures match the anchor, even after its first failure has left the
+	// window; otherwise its escalation state would restart under a new key.
+	key, anchor, since := "rf:"+c.Family+":"+hex(first.ErrorSig.Exact), first.ErrorSig, first.Seq()
+	if l := existingLoop(s, c, d.MaxDistance); l != nil {
+		key, anchor = l.Key, l.Anchor
+		if l.FirstSeq < since {
+			since = l.FirstSeq
+		}
 	}
 
 	seqs := make([]uint64, count)
@@ -91,10 +106,10 @@ func (d *RepeatedFailure) Observe(s *session.SessionState, c *event.ToolCall) []
 
 	return []event.Signal{{
 		Detector: d.Name(),
-		LoopKey:  "rf:" + c.Family + ":" + hex(first.ErrorSig.Exact),
+		LoopKey:  key,
 		Severity: clamp01(sev),
 		Count:    count,
-		Since:    first.Seq(),
+		Since:    since,
 		Evidence: event.Evidence{
 			Family:     c.Family,
 			Commands:   cmds,
@@ -102,6 +117,23 @@ func (d *RepeatedFailure) Observe(s *session.SessionState, c *event.ToolCall) []
 			Files:      files,
 			Seqs:       seqs,
 			Elapsed:    c.Event.ReceivedAt.Sub(first.Event.ReceivedAt),
+			Anchor:     anchor,
 		},
 	}}
+}
+
+// existingLoop returns the repeated-failure loop of c's family whose anchor
+// matches c's error, if the policy is tracking one. Ties go to the lowest
+// key, for determinism.
+func existingLoop(s *session.SessionState, c *event.ToolCall, maxDist int) *session.LoopState {
+	var best *session.LoopState
+	for _, l := range s.Loops {
+		if l.Detector != event.DetectorRepeatedFailure || l.Family != c.Family || l.Anchor == nil {
+			continue
+		}
+		if normalize.SameError(l.Anchor, c.ErrorSig, maxDist) && (best == nil || l.Key < best.Key) {
+			best = l
+		}
+	}
+	return best
 }

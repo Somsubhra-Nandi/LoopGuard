@@ -103,6 +103,7 @@ func expand(steps []step) []step {
 // runResult is what a scenario produced.
 type runResult struct {
 	signals   []string // "<call>:<detector>"
+	keys      []string // LoopKey of each signal, in the same order
 	decisions []string // "<call>:<action>"
 	details   []string // for failure messages
 }
@@ -131,6 +132,7 @@ func runScenario(t testing.TB, sc scenario, th config.Thresholds) runResult {
 	record := func(r Result) {
 		for _, sig := range r.Signals {
 			res.signals = append(res.signals, fmt.Sprintf("%d:%s", call, sig.Detector))
+			res.keys = append(res.keys, sig.LoopKey)
 			res.details = append(res.details, fmt.Sprintf("call %d: signal %s key=%s count=%d sev=%.2f", call, sig.Detector, sig.LoopKey, sig.Count, sig.Severity))
 		}
 		for _, d := range r.Decisions {

@@ -23,14 +23,19 @@ func newFixture(th config.Thresholds) *fixture {
 	return &fixture{e: New(th), s: session.New("cc:t", event.AgentClaudeCode, th), clock: t0}
 }
 
-// call records a completed call that makes exactly the given progress. The
+// call records a completed call that makes exactly the given progress, all
+// of it progress of the "npm test" family (the family of rf signals). The
 // call has no family or file, so the session scores it 0 by itself.
 func (f *fixture) call(progress float64) *event.ToolCall {
+	return f.callWith(progress, "npm test", progress)
+}
+
+func (f *fixture) callWith(progress float64, family string, familyProgress float64) *event.ToolCall {
 	f.clock = f.clock.Add(30 * time.Second)
 	c := &event.ToolCall{Event: &event.Event{ToolName: "other:test", ReceivedAt: f.clock}, TodosDone: -1}
 	f.s.Assign(c.Event)
 	f.s.Record(c)
-	f.s.Progress.Add(c.Seq(), progress)
+	f.s.Progress.Record(c.Seq(), progress, family, familyProgress)
 	return c
 }
 
@@ -75,6 +80,28 @@ func TestResetOnProgress(t *testing.T) {
 	f.post(1.0) // the family recovered
 	if l.Stage != session.StageObserving {
 		t.Errorf("stage after progress = %s, want observing", l.Stage)
+	}
+}
+
+func TestRepeatedFailureIgnoresGeneralProgress(t *testing.T) {
+	f := newFixture(config.Default())
+	f.post(0, rf(0.6))
+	l := f.s.Loops["rf:npm test:1"]
+	// Plenty of progress, none of it by the failing family: new files
+	// touched, another family succeeding.
+	for i := 0; i < 3; i++ {
+		f.e.Post(f.s, f.callWith(0.4, "edit", 0), nil)
+		f.e.Post(f.s, f.callWith(1.0, "go test", 1.0), nil)
+	}
+	if l.Stage != session.StageNudged {
+		t.Errorf("stage = %s, want nudged: only npm test progress may reset this loop", l.Stage)
+	}
+	// Other loops still reset on general progress.
+	os := event.Signal{Detector: event.DetectorOscillation, LoopKey: "os:/a", Severity: 0.7}
+	f.post(0, os)
+	f.e.Post(f.s, f.callWith(1.0, "edit", 0), nil)
+	if st := f.s.Loops["os:/a"].Stage; st != session.StageObserving {
+		t.Errorf("oscillation loop stage = %s, want observing", st)
 	}
 }
 

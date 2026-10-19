@@ -68,6 +68,10 @@ func (e *Engine) resetLoops(s *session.SessionState, signaled map[string]bool) {
 			continue
 		}
 		progress := s.Progress.Since(l.StageSeq)
+		if l.Detector == event.DetectorRepeatedFailure {
+			// A repeated-failure loop only resets on progress of its family.
+			progress = s.Progress.FamilySince(l.Family, l.StageSeq)
+		}
 		switch l.Stage {
 		case session.StageNudged:
 			if progress >= e.th.ResetProgress || s.CallCount-l.LastSignalCall >= uint64(e.th.ResetQuietCalls) {
@@ -189,6 +193,7 @@ func newLoop(s *session.SessionState, c *event.ToolCall, sig event.Signal) *sess
 		l.ActionFP = sig.Evidence.ActionFP
 	case event.DetectorRepeatedFailure:
 		l.Family = sig.Evidence.Family
+		l.Anchor = sig.Evidence.Anchor
 	case event.DetectorOscillation:
 		l.Path = sig.Evidence.Path
 	}

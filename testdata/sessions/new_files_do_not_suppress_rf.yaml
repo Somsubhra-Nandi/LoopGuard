@@ -1,0 +1,12 @@
+name: identical failures with edits to 3 new files in between -> D2 still fires (new files are not family progress)
+steps:
+  - {bash: go test ./..., result: fail, output: gotest/add_fail_1.txt}         # 1
+  - {edit: calc.go, old: "a", new: "b"}                                         # 2: new file this turn (+0.4 general)
+  - {bash: go test ./..., result: fail, output: gotest/add_fail_2.txt}         # 3
+  - {edit: parse.go, old: "a", new: "b"}                                        # 4: new file (+0.4 general)
+  - {bash: go test ./..., result: fail, output: gotest/add_fail_shifted.txt}   # 5
+  - {edit: format.go, old: "a", new: "b"}                                       # 6: new file (+0.4 general, 1.2 in total)
+  - {bash: go test ./..., result: fail, output: gotest/add_fail_1.txt}         # 7
+expect:
+  signals: ["7:repeated_failure"]
+  decisions: ["7:nudge"]
