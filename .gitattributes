@@ -1,0 +1,4 @@
+# LF everywhere, so gofmt checks and shell scripts behave the same on Windows.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf

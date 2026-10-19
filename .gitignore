@@ -1,0 +1,27 @@
+# Build output
+/bin/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go test and profiling artifacts
+*.test
+*.out
+*.prof
+coverage.*
+
+# Local Go workspace
+go.work
+go.work.sum
+
+# Raw hook payloads from scripts/capture-hook.sh (not anonymized)
+.loopguard-capture/
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
