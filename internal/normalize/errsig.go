@@ -3,6 +3,8 @@ package normalize
 import (
 	"math/bits"
 	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -115,11 +117,44 @@ func signatureOfNormalized(norm string) *event.ErrorSignature {
 		key[i] = masked[j]
 		evidence[i] = clip(lines[j])
 	}
+	refs := fileRefs(masked)
 	return &event.ErrorSignature{
-		Exact: xxhash.Sum64String(strings.Join(key, "\n")),
+		Exact: xxhash.Sum64String(strings.Join(key, "\n") + "\x00" + refs),
 		Sim:   SimHash(simWords(masked, isKey), shingleWords),
+		Loc:   locHash(refs),
 		Lines: evidence,
 	}
+}
+
+// fileRefRe finds source file references in masked lines: "path.ext:<LN>",
+// "path.ext(<LN>)", and Python's `File "path", line <LN>`.
+var fileRefRe = regexp.MustCompile(`([\w@~./\\-]*\.[A-Za-z0-9]{1,8})(?::|\()` + regexp.QuoteMeta(PhLoc) + `|File "([^"]+)", line ` + regexp.QuoteMeta(PhLoc))
+
+// fileRefs returns the sorted, de-duplicated source files referenced
+// anywhere in the tail (error lines and stack frames), joined by newlines.
+// Line and column numbers are masked, but which files an error points at
+// still tells errors apart: the same message in auth.ts and in db.ts is two
+// different errors.
+func fileRefs(masked []string) string {
+	var refs []string
+	for _, l := range masked {
+		if !strings.Contains(l, PhLoc) {
+			continue
+		}
+		for _, m := range fileRefRe.FindAllStringSubmatch(l, -1) {
+			refs = append(refs, strings.ReplaceAll(m[1]+m[2], `\`, "/"))
+		}
+	}
+	sort.Strings(refs)
+	return strings.Join(slices.Compact(refs), "\n")
+}
+
+// locHash hashes the file references, or returns 0 when there are none.
+func locHash(refs string) uint64 {
+	if refs == "" {
+		return 0
+	}
+	return xxhash.Sum64String(refs)
 }
 
 // simWords returns the words the simhash is computed over: every
@@ -262,12 +297,13 @@ func SimHash(words []string, k int) uint64 {
 func Hamming(a, b uint64) int { return bits.OnesCount64(a ^ b) }
 
 // SameError reports whether two signatures describe the same error: equal
-// key lines, or simhashes within maxDistance bits (LLD §4.4 step 5).
+// key lines, or simhashes within maxDistance bits that point at the same
+// source files (LLD §4.4 step 5).
 func SameError(a, b *event.ErrorSignature, maxDistance int) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	return a.Exact == b.Exact || Hamming(a.Sim, b.Sim) <= maxDistance
+	return a.Exact == b.Exact || a.Loc == b.Loc && Hamming(a.Sim, b.Sim) <= maxDistance
 }
 
 // FailingTests parses the number of failing tests (or compile errors) from

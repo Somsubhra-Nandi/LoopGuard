@@ -79,6 +79,34 @@ func TestSameErrorPairs(t *testing.T) {
 	}
 }
 
+func TestSignatureKeepsFileName(t *testing.T) {
+	maxDist := config.Default().Detectors.SimHashMaxDistance
+	msg := ": error TS2322: Type 'string' is not assignable to type 'number'.\n"
+	cases := []struct {
+		a, b string
+		same bool
+	}{
+		{"src/auth.ts(14,7)" + msg, "src/db.ts(14,7)" + msg, false},
+		{"src/auth.ts(14,7)" + msg, "src/auth.ts(31,2)" + msg, true}, // moved within the file
+		{"src/auth.ts:14:7 - error TS2322: x\n", "src/db.ts:14:7 - error TS2322: x\n", false},
+		{"  File \"app/auth.py\", line 12, in login\nKeyError: 'user'\n", "  File \"app/db.py\", line 12, in login\nKeyError: 'user'\n", false},
+		{"auth_test.go:7: got 4, want 3\n", "db_test.go:7: got 4, want 3\n", false},
+	}
+	for _, c := range cases {
+		a, b := Signature(c.a), Signature(c.b)
+		if got := SameError(a, b, maxDist); got != c.same {
+			t.Errorf("SameError(%q, %q) = %v, want %v (exact equal %v, loc equal %v, hamming %d)",
+				c.a, c.b, got, c.same, a.Exact == b.Exact, a.Loc == b.Loc, Hamming(a.Sim, b.Sim))
+		}
+	}
+	// Even a simhash collision does not join errors in different files.
+	a, b := Signature(cases[0].a), Signature(cases[0].b)
+	b.Sim, b.Exact = a.Sim, a.Exact+1
+	if SameError(a, b, maxDist) {
+		t.Error("same simhash in different files matched")
+	}
+}
+
 func TestSignatureNearDuplicate(t *testing.T) {
 	// Many error lines with one volatile token that normalization does not
 	// catch (a 3-hex-digit request id). Exact differs; simhash still matches.

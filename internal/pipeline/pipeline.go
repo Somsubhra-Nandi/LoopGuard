@@ -26,7 +26,7 @@ type Pipeline struct {
 func New(th config.Thresholds) *Pipeline {
 	return &Pipeline{
 		th:      th,
-		builder: normalize.NewBuilder(normalize.NewPollMatcher(th.PollingFamilies, th.PollingPatterns)),
+		builder: normalize.BuilderFor(th),
 		detect:  detect.New(th),
 		policy:  policy.New(th),
 	}

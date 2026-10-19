@@ -269,19 +269,21 @@ func family(words []string) string {
 	return name
 }
 
-// PollMatcher decides whether a command is a polling command, whose
-// repeats are expected (LLD §4.3).
-type PollMatcher struct {
+// CommandMatcher matches the primary command of a command line against
+// word prefixes and regular expressions. It decides which commands are
+// polling commands, whose repeats are expected (LLD §4.3), and which are
+// read/search commands, whose output is never a soft failure.
+type CommandMatcher struct {
 	prefixes [][]string
 	patterns []*regexp.Regexp
 }
 
-// NewPollMatcher builds a matcher from polling family prefixes (e.g.
-// "gh run watch") and regular expressions over the normalized command.
+// NewCommandMatcher builds a matcher from command prefixes (non-flag words,
+// e.g. "gh run watch") and regular expressions over the normalized command.
 // Invalid patterns are skipped.
-func NewPollMatcher(families, patterns []string) *PollMatcher {
-	m := &PollMatcher{}
-	for _, f := range families {
+func NewCommandMatcher(prefixes, patterns []string) *CommandMatcher {
+	m := &CommandMatcher{}
+	for _, f := range prefixes {
 		if ws := strings.Fields(strings.ToLower(f)); len(ws) > 0 {
 			m.prefixes = append(m.prefixes, ws)
 		}
@@ -294,12 +296,11 @@ func NewPollMatcher(families, patterns []string) *PollMatcher {
 	return m
 }
 
-// IsPolling reports whether the primary command of c is a polling
-// command: its non-flag words start with a polling prefix, or its text
-// matches a polling pattern.
-func (m *PollMatcher) IsPolling(c Command) bool {
+// Matches reports whether the primary command of c matches: its non-flag
+// words start with one of the prefixes, or its text matches a pattern.
+func (m *CommandMatcher) Matches(c Command) bool {
 	words := c.PrimaryWords()
-	if len(words) == 0 {
+	if m == nil || len(words) == 0 {
 		return false
 	}
 	nonFlag := make([]string, 0, len(words))

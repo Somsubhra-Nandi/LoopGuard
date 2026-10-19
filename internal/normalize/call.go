@@ -3,16 +3,33 @@ package normalize
 import (
 	"strings"
 
+	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/event"
+	"github.com/Somsubhra-Nandi/loopguard/internal/redact"
 )
 
 // Builder turns events into ToolCalls. It is safe for concurrent use.
 type Builder struct {
-	Poll *PollMatcher
+	// Poll flags polling commands.
+	Poll *CommandMatcher
+	// ReadOnly matches read/search commands (grep, cat, git log, ...): their
+	// output quotes other text, so failure markers in it are not a failure.
+	ReadOnly *CommandMatcher
 }
 
-// NewBuilder returns a Builder that uses poll to flag polling commands.
-func NewBuilder(poll *PollMatcher) *Builder { return &Builder{Poll: poll} }
+// NewBuilder returns a Builder using the given polling and read-only
+// command matchers (either may be nil).
+func NewBuilder(poll, readOnly *CommandMatcher) *Builder {
+	return &Builder{Poll: poll, ReadOnly: readOnly}
+}
+
+// BuilderFor returns a Builder configured by th.
+func BuilderFor(th config.Thresholds) *Builder {
+	return NewBuilder(
+		NewCommandMatcher(th.PollingFamilies, th.PollingPatterns),
+		NewCommandMatcher(th.ReadOnlyCommands, nil),
+	)
+}
 
 // Build derives a ToolCall from a post (or post_failure) event. It reads
 // only the event: FileHashAfter, Duration, and Progress are left for the
@@ -30,12 +47,12 @@ func (b *Builder) Build(ev *event.Event) *event.ToolCall {
 		FailingTests: -1,
 		TodosDone:    -1,
 	}
+	readOnly := false
 	if cmd != nil {
 		c.Command = cmd.Canonical
 		c.Family = cmd.Primary()
-		if b.Poll != nil {
-			c.Polling = b.Poll.IsPolling(*cmd)
-		}
+		c.Polling = b.Poll.Matches(*cmd)
+		readOnly = b.ReadOnly.Matches(*cmd)
 	}
 	switch ev.ToolName {
 	case event.ToolEdit:
@@ -53,11 +70,13 @@ func (b *Builder) Build(ev *event.Event) *event.ToolCall {
 	if ev.Phase == event.PhasePre {
 		return c
 	}
-	out := OutputText(ev.Output)
+	// Redact before normalizing: placeholders could otherwise split a token
+	// and leave part of it behind (LLD §13).
+	out := redact.String(tail(OutputText(ev.Output), MaxInput))
 	norm := Text(out)
 	c.ResultFP = HashString(norm)
 	failed := ev.IsError || ev.Phase == event.PhasePostFailure
-	if !failed && ev.ToolName == event.ToolBash && IsSoftFailure(out) {
+	if !failed && ev.ToolName == event.ToolBash && !readOnly && IsSoftFailure(out) {
 		failed = true
 	}
 	if failed {
@@ -65,6 +84,15 @@ func (b *Builder) Build(ev *event.Event) *event.ToolCall {
 		c.FailingTests = FailingTests(norm)
 	}
 	return c
+}
+
+// tail keeps the last max bytes of an output, from a line start: errors
+// are at the end of an output, and Text would otherwise keep the head.
+func tail(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return cutToLine(s[len(s)-max:])
 }
 
 func firstPatchFile(body, cwd string) string {

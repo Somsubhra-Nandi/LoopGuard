@@ -2,7 +2,9 @@ package normalize
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
@@ -90,7 +92,7 @@ func TestCanonicalCommand(t *testing.T) {
 
 func TestPolling(t *testing.T) {
 	th := config.Default()
-	m := NewPollMatcher(th.PollingFamilies, th.PollingPatterns)
+	m := NewCommandMatcher(th.PollingFamilies, th.PollingPatterns)
 	polling := []string{
 		"sleep 30",
 		"gh run watch 123456",
@@ -108,8 +110,8 @@ func TestPolling(t *testing.T) {
 		"cd x && sleep 10",
 	}
 	for _, cmd := range polling {
-		if !m.IsPolling(ParseCommand(cmd)) {
-			t.Errorf("IsPolling(%q) = false, want true", cmd)
+		if !m.Matches(ParseCommand(cmd)) {
+			t.Errorf("polling(%q) = false, want true", cmd)
 		}
 	}
 	notPolling := []string{
@@ -123,8 +125,8 @@ func TestPolling(t *testing.T) {
 		"git status && go test ./...",
 	}
 	for _, cmd := range notPolling {
-		if m.IsPolling(ParseCommand(cmd)) {
-			t.Errorf("IsPolling(%q) = true, want false", cmd)
+		if m.Matches(ParseCommand(cmd)) {
+			t.Errorf("polling(%q) = true, want false", cmd)
 		}
 	}
 }
@@ -205,7 +207,7 @@ func TestOutputText(t *testing.T) {
 
 func TestBuild(t *testing.T) {
 	th := config.Default()
-	b := NewBuilder(NewPollMatcher(th.PollingFamilies, th.PollingPatterns))
+	b := BuilderFor(th)
 
 	c := b.Build(&event.Event{
 		Phase: event.PhasePostFailure, ToolName: event.ToolBash, Cwd: "/repo", IsError: true,
@@ -223,6 +225,45 @@ func TestBuild(t *testing.T) {
 	})
 	if !soft.Failed() {
 		t.Error("soft failure (exit 0 + Traceback) not detected")
+	}
+
+	// Read/search commands quote other text: failure markers in their
+	// output are not a failure.
+	for _, cmd := range []string{
+		`grep -rn "Error:" src`,
+		`rg "panic:" --type go`,
+		`cat build.log`,
+		`tail -50 test-output.txt`,
+		`git log --oneline | head`,
+		`git show HEAD~1`,
+		`Select-String -Path *.log -Pattern "FAILED"`,
+	} {
+		c := b.Build(&event.Event{
+			Phase: event.PhasePost, ToolName: event.ToolBash,
+			Input:  json.RawMessage(fmt.Sprintf(`{"command":%q}`, cmd)),
+			Output: json.RawMessage(`{"stdout":"src/api.ts:12:    throw new Error: bad input\nsrc/x.go:3: panic: unreachable\n1 FAILED\nTraceback (most recent call last)"}`),
+		})
+		if c.Failed() {
+			t.Errorf("%s with matching output counted as a failure", cmd)
+		}
+	}
+	// ...but a real error still is one.
+	grepErr := b.Build(&event.Event{
+		Phase: event.PhasePostFailure, ToolName: event.ToolBash, IsError: true,
+		Input:  json.RawMessage(`{"command":"grep -rn x missing-dir"}`),
+		Output: json.RawMessage(`"grep: missing-dir: No such file or directory"`),
+	})
+	if !grepErr.Failed() {
+		t.Error("a failing grep (non-zero exit) must still be a failure")
+	}
+
+	secret := b.Build(&event.Event{
+		Phase: event.PhasePostFailure, ToolName: event.ToolBash, IsError: true,
+		Input:  json.RawMessage(`{"command":"curl -H 'Authorization: Bearer abc123def456ghi789jkl' https://api.x"}`),
+		Output: json.RawMessage(`"Error: invalid password=hunter2!x for user"`),
+	})
+	if strings.Contains(secret.Command, "abc123def456ghi789jkl") || strings.Contains(strings.Join(secret.ErrorSig.Lines, "\n"), "hunter2") {
+		t.Errorf("secret not redacted: command %q, lines %q", secret.Command, secret.ErrorSig.Lines)
 	}
 
 	readErr := b.Build(&event.Event{

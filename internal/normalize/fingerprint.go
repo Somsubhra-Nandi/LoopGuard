@@ -10,6 +10,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/event"
+	"github.com/Somsubhra-Nandi/loopguard/internal/redact"
 )
 
 // HashString is the content hash used everywhere: xxhash64.
@@ -114,7 +115,7 @@ func (in toolInput) editPairs() []event.EditPair {
 func canonicalInput(tool string, in toolInput, cwd string) (string, *Command) {
 	switch {
 	case tool == event.ToolBash:
-		c := ParseCommand(in.Command)
+		c := ParseCommand(redact.String(in.Command))
 		return c.Canonical, &c
 	case tool == event.ToolEdit:
 		var b strings.Builder

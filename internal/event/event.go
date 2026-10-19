@@ -87,6 +87,10 @@ type ToolCall struct {
 	TodosDone     int             // completed todo items in a todo/task update, -1 if not a todo call
 	Duration      time.Duration
 	Progress      float64 // progress score assigned by the session (LLD §5.1)
+	// FamilyProgress is the part of Progress that is about this call's own
+	// family: it recovered, its error changed to a never-seen one, or fewer
+	// of its tests fail. Only this resets or suppresses repeated failures.
+	FamilyProgress float64
 }
 
 // Seq returns the session sequence number of the call.
@@ -98,8 +102,9 @@ func (c *ToolCall) Failed() bool { return c.ErrorSig != nil }
 // ErrorSignature identifies an error so that re-runs with the same failure
 // can be recognized despite noise (LLD §4.4).
 type ErrorSignature struct {
-	Exact uint64   // xxhash of normalized key lines
-	Sim   uint64   // 64-bit simhash of normalized tail
+	Exact uint64   // xxhash of normalized key lines (source line/col masked, file names kept)
+	Sim   uint64   // 64-bit simhash of the error-bearing lines
+	Loc   uint64   // xxhash of the sorted source files the error lines point at (0 if none)
 	Lines []string // up to 5 key lines, for evidence and nudge text
 }
 
@@ -135,6 +140,10 @@ type Evidence struct {
 	Files      []string      // files edited between attempts (D2)
 	Seqs       []uint64      // the calls that make up the loop, oldest first
 	Elapsed    time.Duration // from the first call of the loop to the current one
+	// Anchor is the error signature that identifies a repeated-failure loop
+	// (D2): the policy keeps it with the loop, and later failures that match
+	// it stay in the same loop, whatever the detector window holds.
+	Anchor *ErrorSignature
 }
 
 // Action is what LoopGuard does about a loop.

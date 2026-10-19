@@ -13,6 +13,11 @@ type Thresholds struct {
 	// command, for polling commands that depend on their arguments
 	// (`kubectl get pods -w`, `curl …/health`).
 	PollingPatterns []string
+
+	// ReadOnlyCommands are command prefixes (like PollingFamilies) for
+	// read/search commands. Their output quotes files and logs, so failure
+	// markers in it ("Error:", "FAILED") never make the call a soft failure.
+	ReadOnlyCommands []string
 }
 
 // DetectorThresholds configures the detectors.
@@ -128,6 +133,11 @@ func Default() Thresholds {
 		PollingPatterns: []string{
 			`^kubectl\b.*\s(-w|--watch)\b`,
 			`^curl\b.*/health`,
+		},
+		ReadOnlyCommands: []string{
+			"grep", "rg", "ag", "cat", "head", "tail", "less", "more", "find", "fd", "ls", "tree", "wc",
+			"git log", "git diff", "git show", "git status", "git blame", "git grep",
+			"select-string", "get-content", "findstr", "type",
 		},
 	}
 }
