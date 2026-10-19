@@ -4,16 +4,21 @@ Thanks for helping. LoopGuard is in early development, so open an issue before s
 
 ## Build and test
 
-You need Go (version in `go.mod`), `make`, and a C compiler for the race detector (`go test -race` needs cgo). On Windows, run `make` from Git Bash.
+You need Go (version in `go.mod`) and `make`. `make test` runs the race detector on Linux and macOS, which needs cgo and a C compiler. On Windows it runs without `-race` by default (`make test RACE=1` turns it on), and you run `make` from Git Bash.
 
 ```sh
 make fmt     # gofmt -s -w .
 make lint    # go vet + staticcheck
-make test    # go test -race ./...
+make test    # go test ./... (-race on Linux/macOS)
 make build   # bin/loopguard, with version info from git
+make eval    # precision/recall on your labeled transcripts (needs LOOPGUARD_EVAL_DIR)
 ```
 
+Without `make` (e.g. in PowerShell), the equivalents are `gofmt -s -l .`, `go vet ./...`, `go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...`, `go test ./...`, and `go build ./cmd/loopguard`.
+
 CI runs `fmt-check`, `vet`, `staticcheck`, `test`, and `build` on Linux, macOS, and Windows. Run `make all` before you push.
+
+Real transcripts go in `testdata/private/` (gitignored) and never in commits. To turn one into a fixture, use `loopguard replay --export-anonymized`, scan the result, and see `testdata/transcripts/README.md`.
 
 ## Ground rules
 

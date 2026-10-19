@@ -29,6 +29,7 @@ loopguard/
 │   ├── session/                    # SessionState, ring buffers, per-file history, progress tracker
 │   ├── detect/                     # Detector interface + exact_repeat, repeated_failure, oscillation, read_thrash, stall, budget
 │   ├── policy/                     # escalation state machine, cooldowns, message templates
+│   ├── pipeline/                   # normalize → session → detect → policy, shared by replay and the daemon
 │   ├── cost/                       # transcript tailer, usage dedupe, pricing, budgets
 │   ├── notify/                     # desktop, ntfy, webhook (slack/discord), terminal-sequence
 │   ├── store/                      # sqlite (modernc.org/sqlite), migrations, repositories
@@ -75,22 +76,29 @@ type Event struct {
     Raw         json.RawMessage   // full payload, kept in memory only
 }
 
-type ToolCall struct {                // derived from a (pre, post) pair joined on ToolUseID
-    Event        *Event               // the post event
-    ActionFP     uint64               // see §4.2
-    Family       string               // e.g. "npm test", "pytest", "go test"
-    ResultFP     uint64               // hash of normalized output
-    ErrorSig     *ErrorSignature      // nil if success
-    FilePath     string               // for edit/write/read
-    EditPair     *EditPair            // for edit: hashes of old/new strings
-    FileHashAfter uint64              // content hash after write/edit (read from disk)
-    Duration     time.Duration
+type ToolCall struct {                // derived from a post event (which carries the tool input)
+    Event         *Event              // the post event
+    ActionFP      uint64              // see §4.2
+    Family        string              // e.g. "npm test", "pytest", "go test"; the tool name for non-bash tools
+    Command       string              // bash: normalized, redacted command (evidence)
+    Polling       bool                // bash: primary command is a polling command (§4.3)
+    ResultFP      uint64              // hash of normalized, redacted output
+    ErrorSig      *ErrorSignature     // nil if success (failed or soft failure otherwise)
+    FilePath      string              // for edit/write/read/patch: normalized "/"-separated path
+    Edits         []EditPair          // for edit: one (old, new) hash pair per replacement (MultiEdit has several)
+    FileHashAfter uint64              // content hash after write/edit (0 = unknown); supplied by the caller
+    FailingTests  int                 // failing-test count parsed from the output, -1 if none
+    TodosDone     int                 // completed todo items (TodoWrite / task updates), -1 if n/a
+    Duration      time.Duration
+    Progress      float64             // progress score (§5.1)
+    FamilyProgress float64            // the part of Progress about this call's own family (§5.1)
 }
 
 type ErrorSignature struct {
-    Exact   uint64   // xxhash of normalized key lines
-    Sim     uint64   // 64-bit simhash of normalized tail
-    Lines   []string // up to 5 key lines (redacted), for evidence/nudge text
+    Exact   uint64   // xxhash of masked key lines + the source files referenced (§4.4)
+    Sim     uint64   // 64-bit simhash of the error-bearing lines
+    Loc     uint64   // xxhash of the sorted source files referenced (0 if none)
+    Lines   []string // up to 5 key lines (normalized, redacted, line numbers kept), for evidence/nudge text
 }
 
 type Signal struct {
@@ -99,16 +107,21 @@ type Signal struct {
     Severity  float64  // 0..1
     Count     int
     Since     uint64   // first seq in the loop
-    Evidence  Evidence // human-readable facts: commands tried, error lines, files
+    Evidence  Evidence // facts: family, ActionFP, path, commands, error lines, files, seqs, elapsed, anchor signature
 }
 
 type Action string // "none" | "nudge" | "deny" | "halt"
 
 type Decision struct {
-    Action   Action
-    LoopKey  string
-    Message  string   // text for the agent (nudge/deny) or the human (halt stopReason)
-    Notify   bool
+    Action    Action
+    LoopKey   string
+    Message   string   // text for the agent (nudge/deny) or the human (halt stopReason)
+    Notify    bool
+    WouldHave Action   // observe mode: what enforce mode would have done (Action stays "none")
+    Reason    string   // one line: why
+    Detector  string
+    Severity  float64
+    Seq       uint64   // event the decision was made on
 }
 ```
 
@@ -198,7 +211,7 @@ Merged into `~/.claude/settings.json` (user scope; `--project` flag → `.claude
 
 ### 4.1 Text normalizer
 
-Applied to command strings and tool outputs before hashing:
+Applied to command strings and tool outputs before hashing, **after redaction** (§13: secrets are replaced on the raw text first, so placeholders cannot split a token and leave part of it behind):
 
 1. Strip ANSI escape codes and `\r`-overwritten progress lines.
 2. Replace with placeholders:
@@ -208,8 +221,10 @@ Applied to command strings and tool outputs before hashing:
    - absolute temp paths (`/tmp/...`, `/var/folders/...`, `%TEMP%`) → `<TMP>`
    - PIDs and ports in common phrases (`pid 1234`, `:54321`) → `<N>`
    - numbers with ≥4 digits → `<N>` (keep small numbers, since they're often meaningful: line numbers, counts)
-3. Collapse whitespace; lower-case only for the *family* key (not the error signature).
-4. Truncate inputs to 64 KB before processing.
+3. Collapse whitespace; drop empty lines; lower-case only for the *family* key (not the error signature).
+4. Truncate inputs to 64 KB before processing. Tool **outputs keep their last 64 KB** (cut at a line start), since errors are at the end; commands keep their first 64 KB.
+
+Implemented as a single-pass scanner (temp-path and RFC-date regexes run only behind cheap substring prefilters); a regexp per placeholder was too slow for the 10k-calls/s budget.
 
 ### 4.2 Action fingerprint (`ActionFP`)
 
@@ -217,8 +232,8 @@ Applied to command strings and tool outputs before hashing:
 
 | Tool | Canonical input |
 |---|---|
-| bash | normalized command (parsed with `mvdan/sh` and re-printed, so `npm  test` == `npm test`); env-var prefixes kept |
-| edit | `path + hash(old_string) + hash(new_string)` |
+| bash | redacted, normalized command (parsed with `mvdan/sh` and re-printed, so `npm  test` == `npm test`); env-var prefixes kept |
+| edit | `path + hash(old_string) + hash(new_string)` (one pair per MultiEdit replacement) |
 | write | `path + hash(content)` |
 | read | `path + offset + limit` |
 | grep/glob | pattern + path |
@@ -227,23 +242,38 @@ Applied to command strings and tool outputs before hashing:
 
 ### 4.3 Command family
 
-For bash: parse the AST and take the first "real" command of each pipeline/list (skipping `cd`, `export`, `source`, `time`, `env X=Y`). The family = first token + first non-flag subcommand token, e.g. `npm test`, `npx jest`, `pytest`, `go test`, `cargo build`, `python -m pytest` → `pytest`. Multi-command lines produce a family set; the primary family is the last command (usually the one whose result matters).
+For bash: parse the AST and take the first "real" command of each pipeline (the producer: `npm test 2>&1 | tail` → `npm test`) and every command of a list (`&&`, `||`, `;`), recursing into subshells, blocks, `if`/`for`/`while` bodies, and `bash|sh|zsh -c '…'`.
 
-Built-in **polling families** (exempt from repeat detectors): `sleep`, `watch`, `gh run watch`, `gh pr checks`, `kubectl get … -w`, `curl …/health`, `docker ps`, `git status`, `ls`. Users extend this in config.
+- **Skipped** (setup, not the result): `cd`, `pushd`, `popd`, `export`, `source`, `.`, `set`, `unset`, `alias`, `true`, `:`, `local`, `declare`, `typeset`, `readonly`, `shopt`, `trap`.
+- **Wrappers stripped**, with their own flags and arguments: `time`, `env` (and its `X=Y`), `command`, `exec`, `nohup`, `sudo` (and `-u user`), `nice` (and its level), `timeout` (and its duration), `xargs`.
+- The command name is lower-cased, with its directory and a Windows extension (`.exe`, `.cmd`, `.bat`, `.ps1`) removed.
+- **Family** = command name + the first argument **only if it is the first argument and looks like a subcommand** (`^[a-z][a-z0-9:_-]*$`). So: `npm test`, `npx jest`, `go test`, `cargo build`, but `pytest tests/x.py` → `pytest`, `pytest -k foo` → `pytest`, `git -C dir status` → `git`, `sleep 30` → `sleep`. Flag arity can't be known in general, so only the first argument counts.
+- **Runners:** `python|python3|py -m X …` and `uv|poetry|pipenv|hatch|pdm run X …` take X's family (`python -m pytest` → `pytest`). `npm|yarn|pnpm|bun run <script>` keep the script (`npm run build` ≠ `npm run test`).
+- Multi-command lines produce a family set; the **primary** family is the last command (usually the one whose result matters). Non-bash tools use the tool name as their family.
+- Commands that don't parse as bash (PowerShell, truncated heredocs) fall back to whitespace splitting.
+
+**Polling commands** (exempt from D1/D2) are matched on the **primary command only**: its non-flag words must start with a polling prefix (`sleep`, `watch`, `gh run watch`, `gh pr checks`, `git status`, `docker ps`, `ls`), or its text must match a polling pattern (`^kubectl\b.*\s(-w|--watch)\b`, `^curl\b.*/health`). `sleep 5 && npm test` is not polling; `cd x && sleep 10` is. Both lists are configurable (`polling_families`, `polling_patterns`).
+
+**Read-only commands** (`grep`, `rg`, `ag`, `cat`, `head`, `tail`, `less`, `more`, `find`, `fd`, `ls`, `tree`, `wc`, `git log|diff|show|status|blame|grep`, `Select-String`, `Get-Content`, `findstr`, `type`; configurable as `read_only_commands`) are matched the same way. Their output quotes other text, so it is never a soft failure (§4.4); a non-zero exit is still a failure.
 
 ### 4.4 Error signature
 
-Input: stderr+stdout tail (last 8 KB) of a failed call, or of a "soft failure" (exit 0 but the output matches failure markers, e.g. `FAILED`, `Error:`, `Traceback`, `panic:`, `npm ERR!`, `error[E`, `✕`, `AssertionError`).
+Input: the tail (last 8 KB of the normalized output) of a failed call, or of a **soft failure**: a **bash** call that exited 0 but whose output contains a failure marker (`FAILED`, `Error:`, `Traceback`, `panic:`, `npm ERR!`, `error[E`, `✕`, `AssertionError`). Soft failures apply only to bash, and never to read-only commands (§4.3): `grep -rn "Error:" src` or reading a log is not a failure.
 
 1. Normalize (§4.1).
-2. Select **key lines**: lines matching `(?i)(error|exception|fail(ed|ure)?|panic|traceback|assert|expected|undefined|cannot|not found|denied|refused|timeout)`. Keep the first 5 unique ones; if none match, use the last 5 non-empty lines.
-3. `Exact = xxhash64(join(keyLines))`.
-4. `Sim = simhash64(shingles(normalized tail, k=4 words))`.
-5. Two signatures are the **same error** if `Exact` is equal OR `hamming(Sim) ≤ 4`.
+2. **Mask source locations**, per line: `file.ext:12:5` → `file.ext:<LN>`, `file.ext(12,5)` → `file.ext(<LN>)`, `line 12` → `line <LN>`, and code-frame gutters `> 12 |` → `> <LN> |`. An edit that shifts the failing line must not change the error. The **file names stay**.
+3. Select **key lines** (on the masked lines): lines containing (case-insensitively) `error`, `exception`, `fail`, `panic`, `traceback`, `assert`, `expected`, `undefined`, `cannot`, `not found`, `denied`, `refused`, `timeout`, `received`, `actual`, or `●` (jest test headers), or the whole words `got`, `want`, `left`, `right`. The extra words catch assertion payloads with no error word (`got 4, want 3`, `Received: 8`, `left: 4`), so different assertions get different signatures. Keep the first 5 unique ones; if none match, use the last 5 non-empty lines. (Matched by hand, not with a regexp: a case-insensitive alternation over every output line dominated the pipeline cost.)
+4. **File references:** the sorted, de-duplicated source files referenced anywhere in the tail (`path.ext:<LN>`, `path.ext(<LN>)`, Python `File "path", line <LN>`), stack frames included.
+5. `Exact = xxhash64(join(maskedKeyLines) + "\x00" + fileRefs)`; `Loc = xxhash64(fileRefs)` (0 if none).
+6. `Sim = simhash64(shingles(words of the error-bearing lines, k=4))`. These are all masked key lines, up to 40, or the whole tail when none match. Simhash over the whole tail let runner chatter (passing tests, summaries) drown a changed assertion: a different cargo assertion was 3 bits away.
+7. Two signatures are the **same error** if `Exact` is equal, OR (`Loc` is equal AND `hamming(Sim) ≤ 4`). The same message in `auth.ts` and in `db.ts` is two errors; the same message moved within one file is one.
+8. `Lines` keeps the unmasked key lines (redacted) for evidence.
+
+On the real and hand-written fixtures in `testdata/outputs/` (go test, tsc, jest real; pytest, cargo hand-written), every same-error pair has `Exact` equal (hamming 0), and every different-error pair is ≥ 14 bits apart.
 
 ### 4.5 File content hash
 
-On post events for `edit`/`write`/`patch`, the daemon reads the file from disk (path resolved against `cwd`, size cap 2 MB) and stores `xxhash64(content)` in the file's history. Skipped for binaries and for files outside `cwd` and the project roots.
+On post events for `edit`/`write`/`patch`, the daemon reads the file from disk (path resolved against `cwd`, size cap 2 MB) and stores `xxhash64(content)` in the file's history. Skipped for binaries and for files outside `cwd` and the project roots. The detection packages never read the disk: the hash comes in with the event (`pipeline.Handle(…, fileHashAfter)`), so detectors stay pure. **Replay** can't read past disk state: it uses the hash of a `Write`'s `content` and no hash for `Edit` (§14).
 
 ---
 
@@ -256,32 +286,54 @@ type SessionState struct {
     StartedAt  time.Time
     LastSeen   time.Time
     Repo       string                    // git root of first cwd
-    Calls      *Ring[ToolCall]           // last 200 completed calls
-    Pending    map[string]*event.Event   // pre events by ToolUseID awaiting post
+    Calls      *Ring[*ToolCall]          // last 200 completed calls
+    Pending    map[string]*event.Event   // pre events by ToolUseID awaiting post (cap 1024)
     Files      map[string]*FileHistory   // path → history
     Families   map[string]*FamilyStats   // family → stats
-    Errors     map[uint64]*ErrorStats    // ErrorSig.Exact → stats (plus simhash bucket index)
-    Progress   ProgressTracker
-    Loops      map[string]*LoopState     // LoopKey → escalation state (policy)
-    Usage      UsageTotals               // tokens, cost, from cost accountant
+    Errors     map[uint64]*ErrorStats    // ErrorSig.Exact → stats
+    Progress   *ProgressTracker
+    Loops      map[string]*LoopState     // LoopKey → escalation state (owned by the policy)
+    Usage      UsageTotals               // tokens, cost, from cost accountant (M4)
     Paused     bool
     TurnSeq    uint64                    // seq at last human prompt
+    PermMode   string                    // latest permission_mode seen
+    NudgesThisTurn int                   // for max_nudges_per_turn
+    CallCount  uint64                    // completed calls; cooldowns count calls, not seqs
 }
 
 type FileHistory struct {
-    Hashes     []uint64   // content hash after each write (last 30)
-    EditPairs  []EditPair // (oldHash, newHash) for each edit (last 30)
-    Reads      int        // reads since last write to this file
-    LastWrite  uint64     // seq
+    Writes     []HashRecord // (seq, content hash) after each write (last 30)
+    Edits      []EditRecord // (seq, oldHash, newHash) for each edit replacement (last 30)
+    Reads      int          // reads since last write to this file
+    LastWrite  uint64       // seq
+    TouchedTurn uint64      // TurnSeq of the last write (for "file not touched this turn")
 }
 
 type FamilyStats struct {
-    Runs, Fails     int
-    ConsecFails     int
-    LastErr         *ErrorSignature
-    LastSuccessSeq  uint64
+    Runs, Fails      int
+    ConsecFails      int
+    LastErr          *ErrorSignature
+    LastSuccessSeq   uint64
+    LastFailingTests int               // -1 if unknown
+    Sigs             []*ErrorSignature // distinct signatures seen (last 50), for "never-seen"
+}
+
+type LoopState struct {           // policy state per LoopKey
+    Key, Detector string
+    Stage         Stage           // observing | nudged | denying | halted
+    ActionFP      uint64          // D1: the repeated action (pre-event matching)
+    Family        string          // D2: the failing family
+    Path          string          // D3: the oscillating file
+    Anchor        *ErrorSignature // D2: the loop's error identity (§6 D2)
+    StartedAt     time.Time
+    FirstSeq, StageSeq, LastSignalSeq uint64
+    LastSignalCall, LastNudgeCall    uint64 // CallCount values
+    Nudges, Occurrences, Denies      int
+    LastSeverity  float64
 }
 ```
+
+Sequence numbers (`Seq`) count every event (pre, post, prompt). Anything measured "in calls" (cooldowns, quiet periods) uses `CallCount`, which only counts completed calls.
 
 ### 5.1 Progress tracker
 
@@ -297,7 +349,11 @@ Each completed call gets a **progress score** in `[0,1]`, which detectors use to
 | Task/todo marked completed (`TaskCompleted` / TodoWrite status change) | 0.8 |
 | Anything else | 0.0 |
 
-`Progress.Recent(n)` = sum of the scores over the last n calls.
+- When a call matches several rows, it gets the **highest** score (not the sum).
+- The "family" rows (failing → success, new never-seen signature, fewer failing tests) apply only to non-polling families. "New family succeeded" applies only to bash.
+- Each score also records its **family part**: the share that came from the first three rows, which describe the call's own family. **Only family progress resets or suppresses a repeated-failure (D2) loop.** Touching new files or succeeding with another family is exactly the "changing things but nothing changes" D2 exists for. Those rows still count toward the general score that the stall detector (D5) and other loops use.
+
+`Progress.Recent(n)` = sum of the scores over the last n calls. `Progress.Since(seq)` = sum over calls after `seq` (exclusive). `Progress.FamilySince(family, seq)` = sum of `family`'s family progress after `seq`.
 
 ---
 
@@ -313,21 +369,24 @@ type Detector interface {
 All detectors look only at calls since the later of: the last human prompt (`TurnSeq`), or a window of the last 50 calls. **Default thresholds are configurable.**
 
 ### D1. Exact repeat
-- **Fires when:** the same `ActionFP` and the same `ResultFP` occur ≥ **3** times in the window, and the family isn't a polling family.
+- **Fires when:** the same `ActionFP` and the same `ResultFP` occur ≥ **3** times in the window **since the last successful file write**, and the call isn't a polling command.
+  - A write in between makes a repeat a re-check, not a no-op ("build after every edit" is normal). Repeated *failures* across edits are D2's job.
+  - Reads and searches (`read`, `grep`, `glob`) and writes themselves are excluded. D4 owns reads and never escalates past a nudge, while D1 can deny and halt.
 - **LoopKey:** `er:<ActionFP>`
 - **Severity:** `min(1, 0.5 + 0.15*(count-3))`
 
 ### D2. Repeated failure (headline detector)
-- **Fires when:** the same family has ≥ **4** failures whose error signatures are the *same error* (§4.4), with **no success of that family** in between, and `Progress.Recent(since first failure) < 1.0`.
-- Edits between attempts don't reset it. That's the point: "changing things but nothing changes".
-- **LoopKey:** `rf:<family>:<ErrorSig.Exact of first occurrence>`
-- **Severity:** `min(1, 0.55 + 0.1*(count-4))`, +0.1 if the same files are edited between attempts.
-- **Evidence:** the family, count, key error lines, the files edited between attempts, and elapsed time.
+- **Fires when:** the same family has ≥ **4** failures whose error signatures are the *same error* as the current one (§4.4), with **no success of that family** in between (failures with other errors neither count nor stop the walk back), and the family's own progress since the first counted failure, `Progress.FamilySince(family, first) < 1.0` (§5.1), stays below the threshold. Polling commands are exempt.
+- Edits between attempts don't reset it, and neither do edits to new files. That's the point: "changing things but nothing changes".
+- **LoopKey:** `rf:<family>:<ErrorSig.Exact of first occurrence>`. **Stable identity:** once the policy tracks a D2 loop, its LoopKey and **anchor signature** live in the loop state. Later failures of the family whose error matches the anchor (`SameError(anchor, sig)`) keep that key, even after the first failure leaves the 50-call window. Otherwise a long loop would get a new key, and its escalation would restart. The state lives until the next human prompt.
+- **Severity:** `min(1, 0.55 + 0.1*(count-4))`, +0.1 if a file was edited in at least two of the gaps between attempts.
+- **Evidence:** the family, count, key error lines, the files edited between attempts, elapsed time, and the anchor signature.
 
 ### D3. Edit oscillation
 - **Fires when**, for one file, either:
   - (a) **Inverse edits:** an edit with `(old=A, new=B)` followed later by `(old=B, new=A)`, at least **2** times; or
-  - (b) **State revisit:** a content hash after a write equals one seen ≥2 writes earlier (A→B→A), at least **2** revisits within 20 writes.
+  - (b) **State revisit:** a content hash after a write equals one seen ≥2 writes earlier (A→B→A), at least **2** revisits within 20 writes. Writing the same content twice in a row is not a revisit.
+- It runs only on successful writes, and fires only when the **current** write is itself an inverse edit or a revisit, so an unrelated later edit of the file doesn't re-fire it. When both variants match, the more severe signal is kept.
 - **LoopKey:** `os:<path>`
 - **Severity:** 0.7 for (a), 0.6 for (b), +0.1 per extra revisit.
 
@@ -350,7 +409,9 @@ All detectors look only at calls since the later of: the last human prompt (`Tur
 
 ### 6.1 Deduplication across detectors
 
-When D1 and D2 fire on the same calls, keep the signal with the higher severity per session per call (D2 wins ties, since it has the better message). Signals are passed to the policy engine sorted by severity.
+- Signals with the same LoopKey collapse into the most severe one.
+- When D1 and D2 fire on overlapping calls (their evidence seqs intersect), **only D2 is kept**, with the higher of the two severities. D2 has the better message. Keeping one detector's LoopKey also stops the loop's escalation state from flipping between `er:` and `rf:` keys as the two severities grow at different rates. "Higher severity wins" would split the escalation.
+- Signals are passed to the policy engine sorted by severity (descending; ties by LoopKey).
 
 ---
 
@@ -365,22 +426,24 @@ stateDiagram-v2
     Nudged --> Observing: progress ≥ 1.0 OR no signal for 15 calls (reset)
     Nudged --> Denying: signal persists ≥ 3 more occurrences after nudge\n AND sev ≥ 0.7 AND detector allows deny
     Denying --> Observing: progress ≥ 1.0 (reset)
-    Denying --> Halted: ≥ 2 more occurrences after first deny\n OR time in loop ≥ halt_after_minutes (20)
+    Denying --> Halted: ≥ 2 more matching attempts after first deny\n OR time in loop ≥ halt_after_minutes (20)
     Halted --> [*]: HALT + notify human
 ```
 
-- **Observe-only mode** (`mode: observe`, the default for the first 3 days after install, configurable): the state machine runs and records "would have nudged/denied/halted", but every decision rendered is `none`. This builds trust and produces data.
-- **Deny** applies only to the **looping action**: a `PreToolUse` whose `ActionFP` or family+recent-error matches the loop. Other actions pass.
+- **Observe-only mode** (`mode: observe`, the default for the first 3 days after install, configurable): the state machine runs and records "would have nudged/denied/halted", but every decision rendered is `none`. This builds trust and produces data. **M1 implements observe mode only:** `Decision.Action` is always `none`, and `Decision.WouldHave` and `Decision.Reason` record the rest. Enforcement lands in M3.
+- **Resets:** "progress" is measured since the loop entered its current stage. For **repeated-failure loops it is the family's progress only** (§5.1); other loops use the general score. A reset loop keeps its nudge history, so the cooldown still applies.
+- **Deny** applies only to the **looping action**: a `PreToolUse` that matches the loop. A D1 loop matches the same `ActionFP`, a D2 loop the same family, and a D3 loop an edit or write to the same file. Other actions pass.
 - **Halt** ends the turn (`continue:false`). The session itself stays usable when the human returns; `Loops` state is reset on the next `UserPromptSubmit`.
-- **Cooldown:** max 1 nudge per LoopKey per 10 calls, and max 3 nudges per turn overall.
-- **Permission mode awareness:** in `default` (manual approval) mode, deny/halt thresholds are raised by 1 step, since a human is presumably watching. In `auto`/`bypassPermissions`/`dontAsk`, the normal thresholds apply.
+- **Cooldown:** max 1 nudge per LoopKey per 10 **completed calls**, and max 3 nudges per turn overall. Suppressed nudges are not recorded.
+- **Permission mode awareness:** in `default` (manual approval) mode, the deny and halt occurrence thresholds are raised by 1 (`manual_mode_extra_occurrences`), since a human is presumably watching. In `auto`/`bypassPermissions`/`dontAsk`, the normal thresholds apply.
 - Detector capabilities: D1/D2/D3 can deny + halt; D4 nudge only; D5 nudge + notify; D6 notify + halt.
 
 ### 7.2 Decision timing
 
-- Signals are produced on **post** events. If a nudge is due, it goes in the post response (`additionalContext`).
-- Deny decisions are evaluated on **pre** events against `Loops` states currently in `Denying`.
-- Halt decisions are rendered on the next event of any phase (pre, post, or batch_end), whichever comes first.
+- Signals are produced on **post** events. If a nudge is due, it goes in the post response (`additionalContext`) and is recorded at that post.
+- Reaching the deny conditions on a post signal **arms** deny (state `Denying`). No decision is recorded then.
+- Deny decisions are evaluated on **pre** events against loops in `Denying`: each matching pre is a (would-have) deny. The first is "the first deny". The `halt_after_deny_occurrences`-th matching attempt after it (default: the 3rd attempt in total) is a halt instead. A matching pre after `halt_after_minutes` in the loop is also a halt. In observe mode the action still runs, so its post produces signals as usual; only the pre attempts count toward halt.
+- Halt decisions are rendered on the next event of any phase (pre, post, or batch_end), whichever comes first. Observe mode records the halt once, at the pre where it was decided.
 
 ### 7.3 Message templates (factual tone)
 
@@ -592,18 +655,29 @@ CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER)
 mode: enforce            # observe | enforce
 observe_days_after_install: 3
 detectors:
+  window: 50                     # calls a detector looks back (never past the last human prompt)
+  simhash_max_distance: 4
   exact_repeat:     { enabled: true, min_count: 3 }
-  repeated_failure: { enabled: true, min_count: 4 }
-  oscillation:      { enabled: true, min_revisits: 2 }
+  repeated_failure: { enabled: true, min_count: 4, max_progress: 1.0 }
+  oscillation:      { enabled: true, min_revisits: 2, revisit_window: 20 }
   read_thrash:      { enabled: true, min_reads: 5 }
   stall:            { enabled: true, window: 25 }
 policy:
   nudge_threshold: 0.55
   deny_after_nudges_occurrences: 3
+  deny_min_severity: 0.7
   halt_after_deny_occurrences: 2
   halt_after_minutes: 20
   max_nudges_per_turn: 3
-polling_families: ["sleep", "watch", "gh run watch", "gh pr checks", "git status"]
+  nudge_cooldown_calls: 10
+  reset_quiet_calls: 15
+  reset_progress: 1.0
+  manual_mode_extra_occurrences: 1
+polling_families: ["sleep", "watch", "gh run watch", "gh pr checks", "git status", "docker ps", "ls"]
+polling_patterns: ['^kubectl\b.*\s(-w|--watch)\b', '^curl\b.*/health']
+read_only_commands: ["grep", "rg", "ag", "cat", "head", "tail", "less", "more", "find", "fd", "ls", "tree", "wc",
+                     "git log", "git diff", "git show", "git status", "git blame", "git grep",
+                     "select-string", "get-content", "findstr", "type"]
 budgets:
   session: { soft_usd: 5, hard_usd: 15, wall_minutes: 180 }
   daily:   { soft_usd: 20, hard_usd: 50 }
@@ -622,18 +696,72 @@ privacy:
 
 ## 13. Redaction (`internal/redact`)
 
-Applied before anything is persisted or put in a notification: AWS keys, `sk-…`/`sk-ant-…` style API keys, GitHub tokens (`ghp_`, `github_pat_`), JWTs, private-key blocks, `password=`/`token=`/`secret=` key-value pairs, `.env`-style `KEY=value` lines where KEY contains SECRET|TOKEN|KEY|PASS. Replacement: `<REDACTED:type>`. Fingerprints are computed on the redacted text, so secrets never reach the DB, even hashed.
+Applied before anything is persisted or put in a notification. Types:
+
+- `private_key`: blocks, including truncated ones.
+- `anthropic_key` (`sk-ant-…`) and `openai_key` (`sk-…`, `sk-proj-…`).
+- `aws_access_key` (`AKIA`/`ASIA`).
+- `github_token` (`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`, `github_pat_`).
+- `slack_token` (`xox?-`) and `google_api_key` (`AIza…`).
+- `jwt`.
+- `bearer`: the token after `Bearer`.
+- `url_credentials`: the password in `scheme://user:pass@host`.
+- `env_secret`: `.env`-style `KEY=value` lines where KEY contains SECRET|TOKEN|KEY|PASS.
+- `secret`: `password=`/`token:`/`"client_secret": "…"`-style pairs.
+
+Replacement: `<REDACTED:type>`. The two key=value rules keep the key and skip values that refer to a secret rather than contain one: `process.env.API_KEY`, `$TOKEN`, `${X}`, `{{ … }}`, placeholders like `<…>` or `****`.
+
+Redaction runs on the **raw** command and output, **before** normalization (§4.1), so fingerprints, signatures, and evidence lines are all computed on redacted text, and secrets never reach the DB, even hashed. Each rule runs its regexp only behind a cheap prefilter (substrings, or a hand check such as "an `=` after an upper-case identifier naming a secret"). Redaction must not cost more than the rest of the pipeline.
 
 ---
 
 ## 14. Replay (`internal/replay`)
 
 ```
-loopguard replay [--agent claude-code] [--since 30d] [--path ~/.claude/projects] [--json] [--label]
+loopguard replay [--since 30d] [--path ~/.claude/projects] [--repo DIR] [--session ID] [--json] [--top N]
+                 [--label] [--labels FILE] [--calls] [--export-anonymized ID --out FILE] [--workers N]
+loopguard label missed <session[/agent]> <from-call> <to-call> [note]
+loopguard eval --path DIR [--labels FILE]          # make eval: needs LOOPGUARD_EVAL_DIR
 ```
-- Reconstructs `Event`s from transcript JSONL (assistant `tool_use` blocks → pre; matching `tool_result` → post; `is_error` from the result) and feeds them through the **same** normalizer, detectors, and policy (forced observe mode).
-- Output: a terminal report (sessions, loops, wasted time, API-equivalent cost, top loops with evidence), or JSON.
-- `--label` opens an interactive TUI to mark each detected loop as true or false positive, and to mark missed loops by seq range. Labels are saved to `labels.jsonl` for the eval harness.
+
+The transcript format is described in [transcript-format.md](./transcript-format.md), from what was observed.
+
+**Reading**
+- Each JSONL line is read with a `bufio.Reader` and no line-length limit (results can be MBs). Malformed lines are counted and skipped, and so are line types replay doesn't use.
+- Events: `tool_use` → pre; the matching `tool_result` (joined on the tool-use id within the file) → post, or post_failure when `is_error`. The post event carries the tool input, as `PostToolUse` does; the pipeline builds the ToolCall from it. The output is the text the model saw (`tool_result.content`).
+- **Turn boundaries** (pipeline `prompt` events) are real human prompts: `origin.kind == "human"`, or plain text without `isMeta`; slash commands; interrupts and rejected tool calls. Task notifications, injected context (`isMeta`, `<local-command-stdout>`, `<system-reminder>`, …), and compaction summaries are not turn boundaries.
+- **Time** comes only from tool and prompt lines, clamped per stream to never go backwards. Metadata lines carry their own clocks.
+- **Streams:** each main session file and each `subagents/agent-*.jsonl` is its own stream, with its own session state (TDD §3.4).
+- **File hashes:** replay can't read past disk state. `Write` uses the hash of its `content` as `FileHashAfter`; `Edit` has none, so D3 state revisit only sees writes. Inverse edits (D3a) still work from the `old_string`/`new_string` pairs.
+- **Filters:** `--since` keeps files modified within the window (whole sessions, not single events). `--repo` matches Claude Code's encoded project directory (`C:\a\b` → `C--a-b`) for the directory and its subdirectories.
+- Streams are replayed in parallel (one goroutine per stream, `--workers`), and a session is streamed, never loaded whole.
+
+**Report**
+- A *loop* is one LoopKey within one human turn of one stream, whose highest severity reached the nudge threshold. Sub-threshold signals are only counted.
+- **Calls** are numbered from 1 per stream in completion order; the report, labels, and `--calls` all use these numbers.
+- **Wasted time** of a loop runs from its first call to its last (min/max of the calls in its signals' evidence). **Wasted tool calls** are `last - first + 1`. Totals are the union over a stream's loops, so overlaps count once.
+- Each top loop shows the repo, detector, family or file, count, duration, 2 redacted error lines, and what LoopGuard would have done: nudge, deny, or halt, at which call. `--top 0` lists no loops; `--top -1` lists all.
+- `--json` emits the same data with a versioned schema ([replay-json.md](./replay-json.md)). Cost is M4.
+
+**Labels and eval**
+- `--label` asks `[y] real loop / [n] false positive / [s] skip / [q] quit` for each detected loop without a label, and appends to `~/.loopguard/labels.jsonl` (`$LOOPGUARD_HOME` overrides the directory).
+- A label records: `kind` (detected|missed), `session_id`, `agent_id`, `loop_key`, `detector`, `from_call`, `to_call`, `verdict` (real|false_positive|missed), `note`, and `labeled_at`. A detected loop counts as labeled when a label has the same stream and loop key and an overlapping call range, so re-runs skip it even if the range moved a little.
+- `loopguard label missed` records a loop the detectors missed. `replay --session ID --calls` lists a session's calls with their numbers.
+- `eval` replays the whole corpus and prints, per detector:
+  - **precision** = TP / (TP + FP) over the labeled detections;
+  - **recall** = the real loops it caught / all real loops;
+  - **mean detection delay** = calls from a real loop's first call to the detector's first signal on it.
+- *Real loops* are the real-labeled detections, with overlapping ones in a stream merged, plus missed loops. A missed loop that a detection now overlaps counts as caught.
+
+**Anonymized export** (`--export-anonymized`) writes transcript-shaped JSONL that replay reads back with the same results. It keeps:
+- structure: tool calls, `is_error`, human prompts, permission modes;
+- tool names, and normalized, redacted commands, with long quoted strings and heredoc/script bodies as hash tokens;
+- edit strings, written content, search patterns, and other tool inputs as hash tokens, so equality is preserved;
+- for failures, the redacted error key lines; every output as a hash token;
+- timestamps shifted to start at the Unix epoch;
+- file paths as `src/file_N.<ext>`; the cwd as `/repo`; other paths below a home directory as `/home/user/p_<hash>`; URLs as `<url:hash>`; the username and repo name learned from paths as `user`/`repo`; emails as `<email>`.
+
+Prompt text, assistant text and thinking, and full outputs are dropped.
 
 ---
 
@@ -655,11 +783,57 @@ type Notification struct { Kind, Title, Body, SessionKey, Repo string; Severity 
 
 | Layer | Tests |
 |---|---|
-| normalize | Table tests: timestamps, durations, paths, simhash near-dup pairs (real pytest/jest/go test outputs) |
+| normalize | Table tests per placeholder rule; same/different-error pairs on `testdata/outputs/` (go test, tsc, jest real; pytest, cargo hand-written) |
+| redact | One test per secret type; normal text (code references, "PASS", "KeyError") left alone |
 | adapters | Golden files: payload in `testdata/hooks/<agent>/<version>/*.json` → expected Event; Decision → expected stdout/exit |
-| detectors | Scripted sessions (YAML DSL: "bash npm test → fail E1" ×4) → expected signals; property tests: polling families never fire |
-| policy | State machine transition tests, including cooldowns and observe mode |
+| detectors | Scripted sessions (YAML DSL in `testdata/sessions/`, runner in `internal/pipeline`) → expected signals and would-have decisions; a 60-call loop keeps one LoopKey; property tests: polling commands never fire |
+| policy | State machine transition tests, including cooldowns, family-only resets, and the observe-mode invariant (never an action other than `none`) |
+| replay | Synthetic transcripts (`internal/replay/replaytest`) covering every observed line shape → events, loops, report, labels, eval, export round trip; golden test on anonymized real sessions (`testdata/transcripts/`) |
 | shim | Daemon down, slow (timeout), and garbage-response cases all → exit 0, empty stdout |
 | e2e | Spin up the daemon, run real `claude -p` in a sandbox repo with a deliberately unfixable failing test (e.g. a test asserting a wrong constant from a read-only file), and assert a nudge appears in the transcript and the halt happens |
-| eval | `make eval`: replay the labeled corpus → precision/recall per detector, regression-gated in CI |
-| perf | Benchmark: 10k events/session in < 1 s; shim round-trip p99 < 50 ms on CI hardware |
+| eval | `make eval` / `loopguard eval`: replay the labeled private corpus → precision, recall, detection delay per detector. Skipped without `LOOPGUARD_EVAL_DIR` (CI has no private data) |
+| perf | Benchmark: 10k calls through the full pipeline in < 1 s (`BenchmarkPipeline10kCalls`); replay throughput; shim round-trip p99 < 50 ms on CI hardware |
+
+`make test` runs `go test -race` on Linux and macOS. On Windows it runs without `-race` (no C toolchain is assumed); `RACE=1` forces it.
+
+---
+
+## 17. Design decisions from M1-A
+
+Decisions made while building the detection core that the first draft of this document didn't specify, and the fixes from the M1-A review. The sections above are updated to match; this is the list in one place.
+
+**Normalization and signatures**
+1. **Location masking** (§4.4): line/column numbers next to a file reference, `line N`, and code-frame gutters are masked before hashing, so an edit that shifts the failing line doesn't change the error. Evidence lines keep the real numbers.
+2. **File names stay in the signature** (review fix): the files an error references, stack frames included, are part of `Exact` and form `Loc`. The simhash path of `SameError` requires equal `Loc`. The same message in `auth.ts` and `db.ts` is two errors.
+3. **Extra key-line keywords** (§4.4): `got`, `want`, `left`, `right` (whole words), `received`, `actual`, and `●`, so assertion payloads count. They are matched by hand rather than with a regexp, for speed.
+4. **Simhash over the error-bearing lines** (up to 40), not the whole tail (§4.4).
+5. **Outputs keep their tail** when over 64 KB (§4.1). The signature uses the last 8 KB of the normalized output.
+6. **Soft failures are bash-only** (§4.4), and **never for read/search commands** (review fix; `read_only_commands`, §4.3).
+7. **Redaction first** (§13): on the raw command and output, before normalization and hashing.
+8. Single-pass normalizer instead of one regexp per placeholder (§4.1).
+
+**Commands**
+9. **Family rules** (§4.3): the subcommand counts only as the first argument and only if word-like; `python -m`, `uv|poetry|pipenv|hatch|pdm run` take the inner family; `npm|yarn|pnpm|bun run <script>` keep the script.
+10. **Wrapper stripping** (§4.3): `time`, `env X=Y`, `command`, `exec`, `nohup`, `sudo -u x`, `nice N`, `timeout N`, `xargs`; `bash -c '…'` is parsed recursively. Commands are lower-cased, with their directory and Windows extension removed.
+11. **Polling is judged on the last (primary) command** (§4.3), and arguments-dependent pollers are regexps (`polling_patterns`).
+
+**Types**
+12. **`Edits []EditPair`** replaces `EditPair *EditPair` (MultiEdit has several pairs).
+13. **New fields** (§2): `ToolCall.Command`, `.Polling`, `.FailingTests`, `.TodosDone`, `.Progress`, `.FamilyProgress`; `ErrorSignature.Loc`; `Evidence.ActionFP`, `.Path`, `.Seqs`, `.Elapsed`, `.Anchor`; `Decision.WouldHave`, `.Reason`, `.Detector`, `.Severity`, `.Seq`; session `CallCount`, `PermMode`, `NudgesThisTurn`; `LoopState` (§5).
+
+**Detectors**
+14. **D1 scope** (§6): only repeats since the last successful write; reads, searches, and writes excluded.
+15. **D2 progress is family-only** (review fix, §5.1, §6): only the family recovering, its error changing to a never-seen one, or fewer failing tests suppress or reset D2. New files and other families succeeding don't.
+16. **Stable D2 loop identity** (review fix, §6): the LoopKey and anchor signature live in the loop state while failures match the anchor, independent of the window.
+17. **D2 always wins the D1/D2 dedup** on overlapping calls, with the max severity (§6.1).
+18. **D3 trigger rule** (§6): fires only when the current write is itself an inverse edit or a revisit; the more severe variant wins.
+
+**Policy**
+19. **Timing** (§7.2): nudge recorded at the post; deny armed at a post and recorded at each matching pre; halt at the matching attempt after the configured number of denies (or after `halt_after_minutes`).
+20. **Counting completed calls** (§5, §7.1): cooldowns and quiet periods use `CallCount`, not seqs.
+21. **Pre-event matching** (§7.1): D1 by ActionFP, D2 by family, D3 by edits or writes to the file.
+22. **Permission-mode adjustment** (§7.1): `default` mode adds `manual_mode_extra_occurrences` (1) to the deny and halt thresholds.
+
+**Structure**
+23. **`internal/pipeline`** (§1): one `Handle(session, event, fileHashAfter)` path for replay and the daemon, so offline and live detection behave the same. Detectors are pure (no I/O, no clock); the file content hash comes in with the event.
+24. **All thresholds in `config.Thresholds`** (§12), including the ones the first draft only gave in prose.
