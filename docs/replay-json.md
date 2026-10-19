@@ -21,10 +21,39 @@ Version 1 (`schema_version: 1`). New fields can be added without a version bump.
             "tool_results": 2914, "unjoined_results": 0, "prompts": 246},
   "errors": [],                             // unreadable files
   "top_loops": [ /* Loop, most wasted time first; length set by --top (-1: all) */ ],
-  "elapsed_seconds": 0.47
+  "elapsed_seconds": 0.47,
+  // The shape of failures, independent of detection:
+  "failure_families": [ /* FamilyFailures: top 10 families by failures */ ],
+  "failure_streaks": [ /* Streak: the longest same-family failure streak of each stream, longest first */ ],
+  // Only with --near-misses (absent otherwise; [] if requested and none):
+  "near_misses": [ /* NearMiss, closest first */ ],
+  // Only with --soft-failures:
+  "soft_failures": [ /* SoftFailure, by stream then call */ ],
+  "soft_failure_markers": {"Error:": 34, "FAILED": 23}  // calls per marker (a call can count for several)
   // Cost (API-equivalent USD) arrives in M4.
 }
 ```
+
+`FamilyFailures`: `{"family": "npm test", "runs": 40, "failures": 12, "soft_failures": 3, "polling": false}`
+
+`Streak`: the longest run of failures of one family with no success of that family in between (any errors): `{"session_id", "agent_id"?, "family", "length", "from_call", "to_call", "distinct_errors"}`.
+
+`NearMiss`: a stretch that came close to a detector without firing:
+
+```jsonc
+{
+  "session_id": "…", "agent_id": "…", "repo": "…",
+  "detector": "repeated_failure",   // exact_repeat | repeated_failure | oscillation | stall
+  "from_call": 12, "to_call": 18,
+  "count": 3, "threshold": 4,
+  "closeness": 0.75,                // 0..1; count/threshold, lower for exempt cases (polling, reads)
+  "reason": "3 same-error failures of `npm test`, threshold is 4 (ended by a success of the family)",
+  "family": "npm test", "file": "src/a.ts",
+  "evidence": ["…"]                 // normalized, redacted error lines or commands
+}
+```
+
+`SoftFailure`: `{"session_id", "agent_id"?, "call", "family", "command", "markers": ["FAILED", "Error:"], "line": "the line with the first marker (normalized, redacted)"}`.
 
 `Loop`:
 

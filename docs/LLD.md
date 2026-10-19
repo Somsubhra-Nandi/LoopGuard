@@ -743,6 +743,17 @@ The transcript format is described in [transcript-format.md](./transcript-format
 - Each top loop shows the repo, detector, family or file, count, duration, 2 redacted error lines, and what LoopGuard would have done: nudge, deny, or halt, at which call. `--top 0` lists no loops; `--top -1` lists all.
 - `--json` emits the same data with a versioned schema ([replay-json.md](./replay-json.md)). Cost is M4.
 
+**Tuning visibility** (detection-free; changes no thresholds)
+- Every report shows the **top 10 command families by failures** (runs, failures, soft failures) and the **longest same-family failure streak per stream**. A streak is any errors, with no success of the family in between.
+- `--near-misses[=N]` (default 10) lists the stretches that came closest to firing without firing, closest first. A side tracker follows the detectors' own conditions per turn:
+  - D2: same-error clusters per family, cut by a success of the family or the end of the turn.
+  - D1: repeats of one action since the last write.
+  - D3: writes per file, with revisits and inverse edits.
+  - Stall: the longest no-progress stretch.
+
+  Each entry shows count vs threshold, a closeness in 0..1, and why it didn't fire: below the threshold, family progress, outside the window, polling, reads left to D4, or "stall arrives in M3". It also shows redacted evidence. Stretches that overlap a loop the same detector reported are dropped.
+- `--soft-failures` lists the calls counted as soft failures (bash, exit 0, failure marker): family, command, the markers found, and the redacted line with the first one. It also counts calls per marker, so noisy markers stand out. Markers are plain substrings, so `KeyError:` contains `Error:`.
+
 **Labels and eval**
 - `--label` asks `[y] real loop / [n] false positive / [s] skip / [q] quit` for each detected loop without a label, and appends to `~/.loopguard/labels.jsonl` (`$LOOPGUARD_HOME` overrides the directory).
 - A label records: `kind` (detected|missed), `session_id`, `agent_id`, `loop_key`, `detector`, `from_call`, `to_call`, `verdict` (real|false_positive|missed), `note`, and `labeled_at`. A detected loop counts as labeled when a label has the same stream and loop key and an overlapping call range, so re-runs skip it even if the range moved a little.
