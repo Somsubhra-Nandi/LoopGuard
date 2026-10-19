@@ -95,6 +95,12 @@ type Result struct {
 	WastedToolCalls   int     // union of loop call ranges per stream
 	Errors            []string
 	Timelines         map[string][]Call // by stream key, with Options.Timeline
+
+	// Visibility for tuning (detection-free).
+	NearMisses   []NearMiss       // closest first
+	SoftFailures []SoftFailure    // by stream, then call
+	Families     []FamilyFailures // by failures, then runs, then name
+	Streaks      []Streak         // longest same-family failure streak per stream, longest first
 }
 
 type streamResult struct {
@@ -106,6 +112,7 @@ type streamResult struct {
 	wasted   time.Duration
 	wastedN  int
 	timeline []Call
+	in       *insights
 	err      error
 }
 
@@ -157,10 +164,59 @@ func Run(streams []Stream, opts Options) *Result {
 		if opts.Timeline {
 			res.Timelines[r.st.Key()] = r.timeline
 		}
+		res.mergeInsights(r.in)
 	}
 	res.Sessions = len(sessions)
 	res.SessionsWithLoops = len(withLoops)
+	res.finishInsights()
 	return res
+}
+
+func (res *Result) mergeInsights(in *insights) {
+	if in == nil {
+		return
+	}
+	res.NearMisses = append(res.NearMisses, in.near...)
+	res.SoftFailures = append(res.SoftFailures, in.soft...)
+	if in.best.Length > 0 {
+		res.Streaks = append(res.Streaks, in.best)
+	}
+	for _, f := range in.fams {
+		found := false
+		for i := range res.Families {
+			if res.Families[i].Family == f.Family {
+				res.Families[i].Runs += f.Runs
+				res.Families[i].Failures += f.Failures
+				res.Families[i].Soft += f.Soft
+				found = true
+				break
+			}
+		}
+		if !found {
+			res.Families = append(res.Families, *f)
+		}
+	}
+}
+
+func (res *Result) finishInsights() {
+	SortNearMisses(res.NearMisses)
+	sort.SliceStable(res.Families, func(i, j int) bool {
+		a, b := res.Families[i], res.Families[j]
+		if a.Failures != b.Failures {
+			return a.Failures > b.Failures
+		}
+		if a.Runs != b.Runs {
+			return a.Runs > b.Runs
+		}
+		return a.Family < b.Family
+	})
+	sort.SliceStable(res.Streaks, func(i, j int) bool {
+		a, b := res.Streaks[i], res.Streaks[j]
+		if a.Length != b.Length {
+			return a.Length > b.Length
+		}
+		return a.SessionID+a.AgentID < b.SessionID+b.AgentID
+	})
 }
 
 func replayStream(p *pipeline.Pipeline, st Stream, opts Options) streamResult {
@@ -173,6 +229,8 @@ func replayStream(p *pipeline.Pipeline, st Stream, opts Options) streamResult {
 	defer f.Close()
 
 	s := p.NewSession(string(event.AgentClaudeCode)+":"+st.Key(), event.AgentClaudeCode)
+	in := newInsights(opts.Thresholds, st)
+	out.in = in
 	nudgeAt := opts.Thresholds.Policy.NudgeThreshold
 	var (
 		times  = []time.Time{{}} // by seq (seq 0 unused)
@@ -205,6 +263,9 @@ func replayStream(p *pipeline.Pipeline, st Stream, opts Options) streamResult {
 		case event.PhasePost, event.PhasePostFailure:
 			done++
 			callOf[ev.Seq] = done
+			if r.Call != nil {
+				in.call(r.Call, done)
+			}
 			if opts.Timeline && r.Call != nil {
 				out.timeline = append(out.timeline, Call{
 					N: done, At: ev.ReceivedAt, Tool: ev.ToolName, Family: r.Call.Family,
@@ -214,6 +275,7 @@ func replayStream(p *pipeline.Pipeline, st Stream, opts Options) streamResult {
 		case event.PhasePrompt:
 			gen++
 			callOf[ev.Seq] = done
+			in.prompt()
 		}
 		for _, sig := range r.Signals {
 			l := loopFor(sig.LoopKey, sig.Detector)
@@ -261,6 +323,7 @@ func replayStream(p *pipeline.Pipeline, st Stream, opts Options) streamResult {
 		spans = append(spans, span{l.StartedAt, l.EndedAt, l.FirstCall, l.LastCall})
 	}
 	out.wasted, out.wastedN = union(spans)
+	in.finish(out.loops)
 	return out
 }
 
