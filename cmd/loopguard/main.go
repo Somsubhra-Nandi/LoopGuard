@@ -2,7 +2,8 @@
 // Claude Code and Codex through their hook systems, detects stuck loops, and
 // nudges, blocks, or halts the agent.
 //
-// Only the CLI skeleton exists so far; see plan.md for the milestones.
+// Replay (offline detection) works; the live commands are placeholders until
+// their milestones, see plan.md.
 package main
 
 import (
@@ -80,7 +81,9 @@ func newRootCmd() *cobra.Command {
 		stubCmd("doctor", "Check that LoopGuard is installed and working", "M2"),
 		stubCmd("status", "Show active sessions and recent loop signals", "M2"),
 		stubCmd("report [session]", "Show a session timeline: calls, loops, interventions, cost", "M4"),
-		stubCmd("replay", "Find loops in past agent transcripts", "M1"),
+		newReplayCmd(),
+		newLabelCmd(),
+		newEvalCmd(),
 		stubCmd("pause <session|--repo>", "Pause enforcement for a session or repo", "M3"),
 		newVersionCmd(),
 	)

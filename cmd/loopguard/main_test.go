@@ -137,8 +137,6 @@ func TestStubSubcommands(t *testing.T) {
 		{[]string{"status"}, "M2"},
 		{[]string{"report"}, "M4"},
 		{[]string{"report", "abc123"}, "M4"},
-		{[]string{"replay"}, "M1"},
-		{[]string{"replay", "--since", "30d"}, "M1"},
 		{[]string{"pause"}, "M3"},
 		{[]string{"pause", "abc123"}, "M3"},
 	}
