@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"errors"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 // When set, the test binary behaves like the real loopguard binary, so tests
@@ -39,17 +41,31 @@ func hookInputs(t *testing.T) map[string][]byte {
 	}
 }
 
+// subprocessTimeout bounds every child process a test starts, so a hook
+// that blocks fails the test instead of hanging CI.
+const subprocessTimeout = 30 * time.Second
+
 func TestHookProcessExitsZeroWithEmptyStdout(t *testing.T) {
 	for name, input := range hookInputs(t) {
 		t.Run(name, func(t *testing.T) {
-			cmd := exec.Command(os.Args[0], "hook", "--agent", "claude-code")
+			ctx, cancel := context.WithTimeout(context.Background(), subprocessTimeout)
+			defer cancel()
+			// CommandContext kills the process when ctx expires; WaitDelay then
+			// closes its pipes so Wait cannot block on a stuck grandchild
+			// holding them open.
+			cmd := exec.CommandContext(ctx, os.Args[0], "hook", "--agent", "claude-code")
+			cmd.WaitDelay = 5 * time.Second
 			cmd.Env = append(os.Environ(), runMainEnv+"=1")
 			cmd.Stdin = bytes.NewReader(input)
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout = &stdout
 			cmd.Stderr = &stderr
 
-			if err := cmd.Run(); err != nil {
+			err := cmd.Run() // Start + Wait
+			if ctx.Err() != nil {
+				t.Fatalf("hook process did not exit within %v (killed)", subprocessTimeout)
+			}
+			if err != nil {
 				t.Fatalf("hook process failed: %v (stderr: %q)", err, stderr.String())
 			}
 			if stdout.Len() != 0 {
