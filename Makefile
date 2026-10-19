@@ -22,7 +22,7 @@ ifeq ($(RACE),1)
 RACEFLAG := -race
 endif
 
-.PHONY: all build test lint vet staticcheck fmt fmt-check tidy clean
+.PHONY: all build test lint vet staticcheck fmt fmt-check tidy clean eval
 
 all: fmt-check lint test build
 
@@ -31,6 +31,16 @@ build:
 
 test:
 	$(GO) test $(RACEFLAG) ./...
+
+# Precision/recall per detector on the private labeled corpus. Needs
+# LOOPGUARD_EVAL_DIR (the private transcripts) and labels from
+# `loopguard replay --label`; skipped otherwise (CI has no private data).
+eval:
+	@if [ -z "$(LOOPGUARD_EVAL_DIR)" ]; then \
+		echo "eval: skipped (set LOOPGUARD_EVAL_DIR to the private transcripts directory)"; \
+	else \
+		$(GO) run ./cmd/loopguard eval --path "$(LOOPGUARD_EVAL_DIR)"; \
+	fi
 
 lint: vet staticcheck
 
