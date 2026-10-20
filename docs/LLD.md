@@ -259,6 +259,9 @@ For bash: parse the AST and take the first "real" command of each pipeline (the 
 - **Family** = command name + the first argument **only if it is the first argument and looks like a subcommand** (`^[a-z][a-z0-9:_-]*$`). So: `npm test`, `npx jest`, `go test`, `cargo build`, but `pytest tests/x.py` → `pytest`, `pytest -k foo` → `pytest`, `git -C dir status` → `git`, `sleep 30` → `sleep`. Flag arity can't be known in general, so only the first argument counts.
 - **Runners:** `python|python3|py -m X …` and `uv|poetry|pipenv|hatch|pdm run X …` take X's family (`python -m pytest` → `pytest`). `npm|yarn|pnpm|bun run <script>` keep the script (`npm run build` ≠ `npm run test`).
 - Multi-command lines produce a family set; the **primary** family is the last command (usually the one whose result matters). Non-bash tools use the tool name as their family.
+- **Equivalences** (one table, `internal/normalize/identity.go`, an example test per rule): `py`/`python3`/`python3.12` → `python`; `python [flags] -m X` → `X`; `npx`/`bunx`/`pnpm exec|dlx`/`yarn exec|dlx`/`npm exec`/`bun x X` → `X`; `npm|yarn|pnpm|bun run test|start|stop|restart` → `… test` (and `npm t`). They apply to families too, so `npx jest` is the family `jest`.
+- **Command identity** (what a deny matches, §7.1): the canonical command name plus every remaining argument except harmless flags (verbosity, color, report format, fail-fast: `-q`, `-v`, `--color=…`, `--tb=…`, `-x`, `--ci`, `-count=1`, …), path arguments cleaned (slashes, no `./`, relative to cwd), sorted, so flag order doesn't matter.
+- **Lines that aren't valid bash** (PowerShell) are split quote-aware at `;`, `&&`, `||`, and `|` (the pipeline's producer only), dropping redirections and the `&`/`.` call operators. `Set-Location`/`Push-Location`/`Pop-Location` are skipped like `cd`.
 - Commands that don't parse as bash (PowerShell, truncated heredocs) fall back to whitespace splitting; quotes around the command word are dropped (`"C:\py\python.exe" -I` → `python`).
 
 **Polling commands** (exempt from D1/D2) are matched on the **primary command only**: its non-flag words must start with a polling prefix (`sleep`, `watch`, `gh run watch`, `gh pr checks`, `git status`, `docker ps`, `ls`), or its text must match a polling pattern (`^kubectl\b.*\s(-w|--watch)\b`, `^curl\b.*/health`). `sleep 5 && npm test` is not polling; `cd x && sleep 10` is. Both lists are configurable (`polling_families`, `polling_patterns`).
@@ -436,14 +439,17 @@ stateDiagram-v2
     Nudged --> Observing: progress ≥ 1.0 OR no signal for 15 calls (reset)
     Nudged --> Denying: signal persists ≥ 3 more occurrences after nudge\n AND sev ≥ 0.7 AND detector allows deny
     Denying --> Observing: progress ≥ 1.0 (reset)
-    Denying --> Halted: ≥ 2 more matching attempts after first deny\n OR time in loop ≥ halt_after_minutes (20)
+    Denying --> Halted: ≥ 2 more matching attempts after first deny\n OR (≥ 1 deny AND time in loop ≥ max(halt_after_minutes, 3× median run time))
     Halted --> [*]: HALT + notify human
 ```
 
 - **Observe-only mode** (`mode: observe`, the default for the first 3 days after install, configurable): the state machine runs and records "would have nudged/denied/halted", but every decision rendered is `none`. This builds trust and produces data. `Decision.WouldHave`, `.Reason`, and `.Message` always record what enforce mode does; `Decision.Action` is that action only when the session's effective mode is enforce (§12, §18 M3-A), and `none` otherwise (observe mode, pauses, replay).
 - **Resets:** "progress" is measured since the loop entered its current stage. For **repeated-failure loops it is the family's progress only** (§5.1); other loops use the general score. A reset loop keeps its nudge history, so the cooldown still applies.
-- **Deny** applies only to the **looping action**: a `PreToolUse` that matches the loop. A D1 loop matches the same `ActionFP`, a D2 loop the same family, and a D3 loop an edit or write to the same file. Other actions pass.
-- **Halt** ends the turn (`continue:false`). The session itself stays usable when the human returns; `Loops` state is reset on the next `UserPromptSubmit`.
+- **Deny** applies only to the **looping action**: a `PreToolUse` that matches the loop. A D1 loop matches the same `ActionFP`, a D2 loop one of the **command identities** of its failing runs (§4.3, `normalize.Identity`: the canonical command and its meaningful arguments, so `go test ./pkg/a` doesn't block `go test ./pkg/b`, while `python3 -m pytest tests -q` matches `pytest tests`; tools without identities match by family), and a D3 loop an edit or write to the same file. Other actions pass.
+- **One more try after a real change**: once a D2 loop has denied at least once, a matching action runs once more if, since the loop's last failing run, a file not edited during the loop was edited or written. If that run fails with the loop's error, the loop is back to denying and the try counts toward the halt like a denied attempt; if it succeeds or fails differently, the loop resets. One try per failing run. (A changed command identity isn't blocked in the first place; if it fails the same way, it joins the loop's identities.)
+- **Resets of D2 loops** with identities come only from those commands succeeding or their error changing; another command of the family passing doesn't unblock the looping one.
+- **Time-based halt**: only from Denying with at least one deny delivered (a slow loop is always blocked before it is stopped). The limit is `max(halt_after_minutes, 3 × the median run time of that command identity this session)`. Families in `slow_families` never halt on time, only on counts. The time in the loop leaves out `PermissionWait`: in permission mode `default`, per call, the time from `PreToolUse` to the post minus the tool's own `duration_ms` (what can be measured: mostly the human deciding on the permission prompt, plus hook overhead).
+- **Halt** ends the turn (`continue:false`). The session itself stays usable when the human returns; `Loops` state is reset on the next human `UserPromptSubmit`, and that prompt's reply carries a short note (§7.3) that the stop is over.
 - **Cooldown:** max 1 nudge per LoopKey per 10 **completed calls**, and max 3 nudges per turn overall. Suppressed nudges are not recorded.
 - **Permission mode awareness:** in `default` (manual approval) mode, the deny and halt occurrence thresholds are raised by 1 (`manual_mode_extra_occurrences`), since a human is presumably watching. In `auto`/`bypassPermissions`/`dontAsk`, the normal thresholds apply.
 - Detector capabilities: D1/D2/D3 can deny + halt; D4 nudge only; D5 nudge + notify; D6 notify + halt.
@@ -468,13 +474,21 @@ Repeating similar edits is unlikely to change the result. Options that often hel
 
 Deny:
 ```
-LoopGuard blocked this command: it is the same `{family}` run that has failed {count} times with the same error, with no change in outcome. A different approach, or a question to the user, is needed before running it again.
+LoopGuard blocked this command: it is the same `{command}` run that has failed {count} times with the same error, with no change in outcome. A different approach, or a question to the user, is needed before running it again.
 ```
 
-Halt (stopReason, shown to the human):
+Halt (stopReason, shown to the human). It says **turn**, never "session": after an earlier wording ("halted this session", "To let it continue, run: loopguard pause"), Claude refused to run anything in the following turns.
 ```
-LoopGuard halted the agent: stuck on `{family}` ({count} identical failures, {minutes} min, ~{cost}). See `loopguard report {short_session}`.
+LoopGuard stopped this turn: `{family}` failed {count} times with the same error and the loop continued after {denies} blocks. Your next message continues normally. (To turn LoopGuard off for this session: loopguard pause --session {short_session})
 ```
+A time-based halt reads "… and the loop has lasted {minutes} min (limit {limit}) after {denies} blocks". The `systemMessage` (and the deny reason of a halt on `PreToolUse`) is `LoopGuard stopped this turn: {reason}`.
+
+After a halt (first human prompt, `UserPromptSubmit` `additionalContext`):
+```
+LoopGuard's earlier stop applied only to the previous turn; commands are not blocked now.
+```
+
+The nudge shows up to 3 error lines, preferring assertion payloads and error messages (`Expected:`/`Received:`, pytest `E` lines, `left:`/`right:`, `error TS…`, `error[E…]`, `x_test.go:N: … want`, `SomeError: …`) over test names, and never FAIL or summary lines (`ErrorSignature.Best`).
 
 Oscillation:
 ```
@@ -668,7 +682,7 @@ CREATE TABLE pauses (                   -- migration 3: `loopguard pause`
 );
 ```
 
-- **Intervention outcome** is decided 10 completed calls after each intervention, real or would-have (§18 M3-A): `halted` if the loop was halted meanwhile (a halt itself is `halted` at once); `recovered` if the family succeeded or its error changed (D2), the repeated action gave a different result (D1), or the loop stopped signaling (no signal in the last 5 of the 10 calls); `continued_loop` otherwise; `unknown` if the turn or the session ended first (or the daemon restarted). This is the core product metric ("nudge success rate"); `loopguard stats` shows it per detector.
+- **Intervention outcome** is decided 10 completed calls after each intervention, real or would-have (§18 M3-A): `halted` if the loop was halted meanwhile (a halt itself is `halted` at once); `recovered` if the looping command itself (one of the loop's command identities) later succeeded or its error changed (D2), or the repeated action gave a different result (D1); `moved_on` if none of that, but the loop stopped signaling (no signal in the last 5 of the 10 calls: the agent did something else, which says nothing about the problem); `continued_loop` otherwise; `unknown` if the turn or the session ended first (or the daemon restarted). This is the core product metric ("nudge success rate"); `loopguard stats` shows it per detector, with recovered and moved_on apart; recovery rate = recovered / (recovered + moved_on + continued_loop + halted).
 - **Wasted time** for a loop = time from the first call in the loop (`Since`) to recovery or halt.
 - **Retention:** a nightly job deletes `calls`/`signals` older than `retention_days` (30); `sessions` and `interventions` aggregates are kept.
 
@@ -676,7 +690,7 @@ CREATE TABLE pauses (                   -- migration 3: `loopguard pause`
 
 ## 12. Configuration (`internal/config`)
 
-`~/.loopguard/config.yaml` (global) merged with `<repo>/.loopguard.yaml` (per repo, at the git root of the session's cwd). The repo file can only *tighten*, never loosen (exact rules in §18 M3-A): `enabled: false`, `mode: observe`, a detector's `enabled: false`, and lower occurrence/severity thresholds and budgets. A missing file means the defaults; an invalid one is skipped with a warning (daemon log, `doctor`). When no file sets `mode`, the mode is **observe**.
+`~/.loopguard/config.yaml` (global) merged with `<repo>/.loopguard.yaml` (per repo, at the git root of the session's cwd). The repo file can only *tighten*, never loosen (exact rules in §18 M3-A): `enabled: false`, `mode: observe`, a detector's `enabled: false`, and lower occurrence/severity thresholds and budgets. One exception, by design: a repo file may **add** `slow_families` (a repo knows its slow commands, and they only lose the time-based halt). A missing file means the defaults; an invalid one is skipped with a warning (daemon log, `doctor`). When no file sets `mode`, the mode is **observe**.
 
 ```yaml
 mode: enforce            # observe | enforce (unset: observe)
@@ -708,6 +722,7 @@ read_only_commands: ["grep", "rg", "ag", "cat", "head", "tail", "less", "more", 
                      "git log", "git diff", "git show", "git status", "git blame", "git grep",
                      "select-string", "get-content", "findstr", "type",
                      "docker logs", "kubectl logs", "aws logs", "journalctl", "curl", "wget", "echo", "printf"]
+slow_families: []        # never halt on time, only on counts; .loopguard.yaml may add to it
 error_marker_families: ["pytest", "jest", "vitest", "go test", "cargo test", "cargo build", "tsc",
                         "npm test", "yarn test", "pnpm test", "bun test", "npm run test", "yarn run test",
                         "pnpm run test", "bun run test", "npx jest", "npx vitest", "npx tsc",
@@ -988,3 +1003,33 @@ Decisions made while switching interventions on (config loading, modes, enforce 
 
 **Tests and demo**
 64. **`testdata/scenarios/stuck-npm-test.jsonl`** is the scripted stuck session (payload shapes from the 2.1.304 captures; `<CWD>` is replaced at run time), written by `go test ./cmd/loopguard-hook -run ScenarioFile -update`. `TestInterventionsThroughTheHookBinary` runs it through the real `loopguard-hook` binary and a daemon in a temp home, in enforce and observe mode; `scripts/demo-intervention.ps1` runs the same file and prints every event with LoopGuard's reply.
+
+### M3-B
+
+Fixes from the live enforce test in Claude Code 2.1.304 and from the M3-A review.
+
+**Halt wording** (§7.3)
+65. **"Turn", never "session"**: stopReason `LoopGuard stopped this turn: {reason}. Your next message continues normally. (To turn LoopGuard off for this session: loopguard pause --session {id})`; the `systemMessage` and a halt's deny reason start the same way. In the live test, "halted this session" plus "To let it continue, run: loopguard pause" made Claude refuse to run anything after the human's next prompt, although LoopGuard had reset. A template test checks that "session" appears only in the optional pause command.
+66. **Post-halt note**: after a halt that reached the agent (enforce mode), the next human `UserPromptSubmit` reply carries `additionalContext`: "LoopGuard's earlier stop applied only to the previous turn; commands are not blocked now." It goes on the prompt itself rather than on a later tool event, since the agent decides whether to call tools before any tool event. It is not an intervention (no row, no outcome).
+
+**Blocking the same command** (§4.3, §7.1)
+67. **Command identity** replaces the family for D2 deny matching; equivalence rules live in one table (`identity.go`). They also apply to families (`npx jest` is now `jest`), so a reworded command doesn't start a new loop either. The replay golden changed only in family statistics (no loop changed).
+68. **Everything after the command name is sorted** for the identity, the subcommand included: the family's "first word-like argument" rule would make `pytest tests -k a` and `pytest -k a tests` differ. The flip side: two different commands with the same multiset of arguments (`-k a -m b` vs `-k b -m a`) share an identity.
+69. **PowerShell segmentation** (§4.3): the whitespace fallback now splits commands quote-aware, so `Set-Location x; npm test 2>&1 | Select-Object -Last 40` is `npm test`. Fallback words keep their quotes, so a quoted first argument is never taken for a subcommand.
+70. **D2 resets come from the loop's own commands**: with identities, only one of them succeeding (or failing with another error) resets a nudged or denied loop. Found by a scenario test: `npm test -- other.test.ts` passing reset the `npm test` loop and unblocked it.
+
+**One more try** (§7.1)
+71. After at least one deny, an edit or write (successful) to a file not edited during the loop, since its last failing run, lets one matching run through (`LoopState.RetrySeq/RetryPending`). Same error → back to denying, counted like a denied attempt (`Denies++`), so retries can't postpone the halt forever; success or another error → reset. Only D2 loops get it: D1 is reset by any write already, and D3's "change" is the loop itself. Files edited between attempts (`Evidence.Files`) form the loop's file set.
+
+**Time rule** (§7.1)
+72. A time-based halt needs Denying and ≥ 1 deny; limit `max(halt_after_minutes, 3 × median run time of the command identity)` (the session keeps the last 20 run times per identity); `slow_families` (config.yaml, and a repo may add) never halt on time. Run time is the post's `duration_ms` when Claude Code sends it (new `Event.RunTime`), else the pre→post gap.
+73. **Permission wait**: in permission mode `default`, per call, (pre→post gap) − `duration_ms` is added to `SessionState.PermissionWait` (with time samples, so a loop subtracts only the wait since it started). That is all that can be measured from hooks: it is mostly the human deciding, plus hook overhead; time the agent spends thinking between calls still counts.
+
+**Outcomes** (§11)
+74. **`moved_on`**: `recovered` now requires the looping command identity to succeed or its error to change; a loop that just went quiet is `moved_on`. Another command of the family passing is `moved_on` too. `stats` shows rec/moved/cont/halt/unk and counts moved_on against the recovery rate. Rows decided before M3-B keep their old `recovered` (some of which were really "went quiet"); they can't be split after the fact.
+
+**Evidence** (§7.3)
+75. **`ErrorSignature.Best`**: up to 3 lines scored per runner pattern (assertion payloads and error messages 4, assertion words 3, test names and frames 2, other key lines 1, FAIL/summary lines 0), in output order. `Lines` (and so `Exact`) are unchanged; D2's `Evidence.ErrorLines` uses `Best`. Tested on every fixture in `testdata/outputs`.
+
+**Real prompts** (§3.1, decision 58)
+76. **Checked against private data** (counts only): the private hook captures hold one `UserPromptSubmit`, plain text. In 24 private transcripts the user messages were 184 plain human text, 39 `<pasted_content …>` (origin human), 16 slash commands (`<command-name>`), 31 `<task-notification>`, 16 `<local-command-caveat>`, 8 `<local-command-stdout>`, 18 `isMeta` text, and 4 interrupts. The rule stands; test cases now pin `<pasted_content` and `<command-name>` as human. Whether Claude Code fires `UserPromptSubmit` for task notifications at all is still unverified (no capture).
