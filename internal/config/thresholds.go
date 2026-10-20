@@ -143,6 +143,7 @@ func Default() Thresholds {
 			"grep", "rg", "ag", "cat", "head", "tail", "less", "more", "find", "fd", "ls", "tree", "wc",
 			"git log", "git diff", "git show", "git status", "git blame", "git grep",
 			"select-string", "get-content", "findstr", "type",
+			"docker logs", "kubectl logs", "aws logs", "journalctl", "curl", "wget", "echo", "printf",
 		},
 		ErrorMarkerFamilies: []string{
 			"pytest", "jest", "vitest", "go test", "cargo test", "cargo build", "tsc",

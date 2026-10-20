@@ -184,7 +184,10 @@ func printNode(b *strings.Builder, n syntax.Node) {
 // add records one real command, unwrapping wrappers and skipping setup
 // commands. Shell interpreters with -c are parsed recursively.
 func (c *Command) add(words []string, depth int) {
-	words = unwrap(words)
+	if psAssignment(words) {
+		return
+	}
+	words = unwrap(skipAssignments(words))
 	if len(words) == 0 {
 		return
 	}
@@ -200,6 +203,38 @@ func (c *Command) add(words []string, depth int) {
 	}
 	c.Commands = append(c.Commands, words)
 	c.Families = append(c.Families, family(words))
+}
+
+// skipAssignments drops leading `NAME=value` words: the parser keeps bash
+// assignments apart, but lines that fall back to whitespace splitting
+// (PowerShell, truncated heredocs) still carry them.
+func skipAssignments(words []string) []string {
+	for len(words) > 0 && isAssignment(words[0]) {
+		words = words[1:]
+	}
+	return words
+}
+
+func isAssignment(w string) bool {
+	name, _, ok := strings.Cut(w, "=")
+	if !ok || name == "" || isDigit(name[0]) {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		if c := name[i]; c != '_' && !isDigit(c) && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+// psAssignment reports whether words are a PowerShell variable assignment
+// (`$env:FOO='x'`, `$x = 1`): setup, like export.
+func psAssignment(words []string) bool {
+	if len(words) == 0 || len(words[0]) < 2 || words[0][0] != '$' {
+		return false
+	}
+	return strings.Contains(words[0], "=") || len(words) > 1 && strings.HasPrefix(words[1], "=")
 }
 
 // unwrap strips wrappers (`time`, `env X=Y`, `timeout 30`, `sudo -u x`) and
@@ -234,9 +269,10 @@ func unwrap(words []string) []string {
 }
 
 // commandName lower-cases the command word and strips its directory and a
-// Windows executable extension: "C:\Python\python.exe" → "python".
+// Windows executable extension: "C:\Python\python.exe" → "python". Quotes
+// around it (left by the whitespace fallback) are dropped too.
 func commandName(w string) string {
-	w = strings.ToLower(w)
+	w = strings.ToLower(strings.Trim(w, `"'`))
 	if i := strings.LastIndexAny(w, `/\`); i >= 0 {
 		w = w[i+1:]
 	}

@@ -34,6 +34,14 @@ func TestFamily(t *testing.T) {
 		{"time go test ./...", []string{"go test"}},
 		{"env CI=1 FOO=bar npm test", []string{"npm test"}},
 		{"CI=1 npm test", []string{"npm test"}},
+		{"FOO=bar npm test", []string{"npm test"}},
+		{"FOO=bar BAZ=1 go test ./...", []string{"go test"}},
+		{"cd web && FOO=bar npm test", []string{"npm test"}},
+		{`FOO=bar npm test "unterminated`, []string{"npm test"}},                   // whitespace fallback
+		{`S="/tmp/x"; "C:\Python312\python.exe" -I - <<'EOF'`, []string{"python"}}, // truncated heredoc
+		{"$env:FOO='x'; npm test", []string{"npm test"}},
+		{`$env:FOO = "x"; npm test`, []string{"npm test"}},
+		{"$env:CI=1; $x = 2; go test ./...", []string{"go test"}},
 		{"timeout 60 cargo test", []string{"cargo test"}},
 		{"npm test 2>&1 | tail -20", []string{"npm test"}},
 		{"npm run build && npm test", []string{"npm run build", "npm test"}},
@@ -261,6 +269,17 @@ func TestBuild(t *testing.T) {
 		`git log --oneline | head`,
 		`git show HEAD~1`,
 		`Select-String -Path *.log -Pattern "FAILED"`,
+		`Get-Content test.log -Tail 50`,
+		`type build.log`,
+		`docker logs api --tail 100`,
+		`kubectl logs deploy/api`,
+		`aws logs tail /aws/lambda/fn`,
+		`journalctl -u api -n 50`,
+		`curl -s http://localhost:3000/api`,
+		`wget -qO- http://localhost:3000/api`,
+		`echo "FAILED: see above"`,
+		`printf 'Error: %s\n' x`,
+		`$env:NO_COLOR=1; Get-Content out.txt`,
 	} {
 		c := b.Build(&event.Event{
 			Phase: event.PhasePost, ToolName: event.ToolBash,
