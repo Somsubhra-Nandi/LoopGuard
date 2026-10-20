@@ -40,6 +40,9 @@ jobs:
       - name: staticcheck
         run: make staticcheck
 
+      - name: committed hook payloads are structure-only
+        run: make check-testdata
+
       - name: go test (-race on Linux and macOS)
         run: make test
 

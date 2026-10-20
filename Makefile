@@ -23,7 +23,7 @@ ifeq ($(RACE),1)
 RACEFLAG := -race
 endif
 
-.PHONY: all build test lint vet staticcheck fmt fmt-check tidy clean eval
+.PHONY: all build test check-testdata lint vet staticcheck fmt fmt-check tidy clean eval
 
 all: fmt-check lint test build
 
@@ -33,6 +33,12 @@ build:
 
 test:
 	$(GO) test $(RACEFLAG) ./...
+
+# Safety net against committing real hook payloads: fails if a file under
+# testdata/hooks has a long string in a content field (prompt, tool_input,
+# ...). Committed payloads come from `loopguard capture export --structure-only`.
+check-testdata:
+	$(GO) test ./internal/capture -run '^TestCommittedHookPayloadsHaveNoContent$$' -count=1
 
 # Precision/recall per detector on the private labeled corpus. Needs
 # LOOPGUARD_EVAL_DIR (the private transcripts) and labels from
