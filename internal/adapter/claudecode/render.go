@@ -48,10 +48,13 @@ type output struct {
 func Render(ev *event.Event, d event.Decision) (stdout []byte, exitCode int) {
 	var o output
 	switch {
-	case d.Action == event.ActionNudge && (ev.Phase == event.PhasePost || ev.Phase == event.PhasePostFailure):
+	case d.Action == event.ActionNudge && (ev.Phase == event.PhasePost || ev.Phase == event.PhasePostFailure || ev.Phase == event.PhasePrompt):
 		name := "PostToolUse"
-		if ev.Phase == event.PhasePostFailure {
+		switch ev.Phase {
+		case event.PhasePostFailure:
 			name = "PostToolUseFailure"
+		case event.PhasePrompt:
+			name = "UserPromptSubmit" // context added before Claude starts the turn
 		}
 		o.HookSpecificOutput = &hookSpecific{HookEventName: name, AdditionalContext: clip(d.Message, maxContext)}
 	case d.Action == event.ActionDeny && ev.Phase == event.PhasePre:
@@ -64,7 +67,10 @@ func Render(ev *event.Event, d event.Decision) (stdout []byte, exitCode int) {
 		f := false
 		o.Continue = &f
 		o.StopReason = clip(d.Message, maxContext)
-		o.SystemMessage = "LoopGuard halted this session: " + short(d)
+		// "turn", never "session": a halt ends one turn, and the next human
+		// message continues normally (the agent once read "halted this
+		// session" as a standing order and refused to run anything).
+		o.SystemMessage = haltPrefix + short(d)
 		if ev.Phase == event.PhasePre {
 			// A halt is decided on the looping action itself: deny it too, so
 			// it doesn't run while the turn stops. The full text is already in
@@ -72,7 +78,7 @@ func Render(ev *event.Event, d event.Decision) (stdout []byte, exitCode int) {
 			o.HookSpecificOutput = &hookSpecific{
 				HookEventName:            "PreToolUse",
 				PermissionDecision:       "deny",
-				PermissionDecisionReason: "LoopGuard halted this session: " + short(d),
+				PermissionDecisionReason: haltPrefix + short(d),
 			}
 		}
 	}
@@ -90,6 +96,10 @@ func Render(ev *event.Event, d event.Decision) (stdout []byte, exitCode int) {
 	}
 	return bytes.TrimRight(b.Bytes(), "\n"), 0
 }
+
+// haltPrefix starts the halt's systemMessage and deny reason (the policy's
+// stopReason starts the same way).
+const haltPrefix = "LoopGuard stopped this turn: "
 
 func haltPhase(p event.Phase) bool {
 	switch p {

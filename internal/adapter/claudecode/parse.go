@@ -92,6 +92,12 @@ func parseAt(raw []byte, now time.Time) (*event.Event, error) {
 		if ev.Phase == event.PhasePost {
 			ev.Output = present(m["tool_response"])
 		}
+		if ev.Phase != event.PhasePre {
+			var ms float64
+			if json.Unmarshal(m["duration_ms"], &ms) == nil && ms > 0 {
+				ev.RunTime = time.Duration(ms * float64(time.Millisecond))
+			}
+		}
 		if ev.Phase == event.PhasePostFailure {
 			ev.IsError = true
 			// The failure text is in "error"; fall back to a response if a

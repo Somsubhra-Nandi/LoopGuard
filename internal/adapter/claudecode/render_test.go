@@ -34,22 +34,27 @@ func TestRender(t *testing.T) {
 		},
 		{
 			name: "halt on pre", ev: ev(event.PhasePre), d: event.Decision{Action: event.ActionHalt, Message: "Stuck.\nDetails", Reason: "stuck on a failing test"},
-			want: `{"continue":false,"stopReason":"Stuck.\nDetails","systemMessage":"LoopGuard halted this session: stuck on a failing test",` +
-				`"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"LoopGuard halted this session: stuck on a failing test"}}`,
+			want: `{"continue":false,"stopReason":"Stuck.\nDetails","systemMessage":"LoopGuard stopped this turn: stuck on a failing test",` +
+				`"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"LoopGuard stopped this turn: stuck on a failing test"}}`,
 		},
 		{
 			name: "halt on batch end without reason", ev: ev(event.PhaseBatchEnd), d: event.Decision{Action: event.ActionHalt, Message: "Stuck on npm test.\nMore"},
-			want: `{"continue":false,"stopReason":"Stuck on npm test.\nMore","systemMessage":"LoopGuard halted this session: Stuck on npm test."}`,
+			want: `{"continue":false,"stopReason":"Stuck on npm test.\nMore","systemMessage":"LoopGuard stopped this turn: Stuck on npm test."}`,
 		},
 		{
 			name: "halt with notify", ev: ev(event.PhasePost), d: event.Decision{Action: event.ActionHalt, Message: "halted\x07now", Reason: "r", Notify: true},
-			want: `{"continue":false,"stopReason":"halted\u0007now","systemMessage":"LoopGuard halted this session: r","terminalSequence":"\u001b]777;notify;LoopGuard;halted now\u0007"}`,
+			want: `{"continue":false,"stopReason":"halted\u0007now","systemMessage":"LoopGuard stopped this turn: r","terminalSequence":"\u001b]777;notify;LoopGuard;halted now\u0007"}`,
 		},
 		// Actions that don't apply to the phase render as none.
 		{name: "deny on post", ev: ev(event.PhasePost), d: event.Decision{Action: event.ActionDeny, Message: msg}, empty: true},
 		{name: "nudge on pre", ev: ev(event.PhasePre), d: event.Decision{Action: event.ActionNudge, Message: msg}, empty: true},
 		{name: "halt on stop", ev: ev(event.PhaseStop), d: event.Decision{Action: event.ActionHalt, Message: msg}, empty: true},
 		{name: "halt on prompt", ev: ev(event.PhasePrompt), d: event.Decision{Action: event.ActionHalt, Message: msg}, empty: true},
+		{name: "deny on prompt", ev: ev(event.PhasePrompt), d: event.Decision{Action: event.ActionDeny, Message: msg}, empty: true},
+		{
+			name: "note on prompt", ev: ev(event.PhasePrompt), d: event.Decision{Action: event.ActionNudge, Message: msg},
+			want: `{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"` + msg + `"}}`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

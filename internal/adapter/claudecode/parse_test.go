@@ -151,9 +151,14 @@ func dirExists(p string) bool {
 
 func TestPromptTurnBoundaries(t *testing.T) {
 	for prompt, want := range map[string]event.Phase{
-		"fix the failing test":                   event.PhasePrompt,
-		"/review":                                event.PhasePrompt,
-		"<str:230>":                              event.PhasePrompt, // structure-only golden payloads
+		"fix the failing test": event.PhasePrompt,
+		"/review":              event.PhasePrompt,
+		"<str:230>":            event.PhasePrompt, // structure-only golden payloads
+		// Seen in real transcripts as human turns (origin "human" or a
+		// typed slash command): they start with "<" but are not injected.
+		`<pasted_content id="1">log lines</pasted_content> why?`:                  event.PhasePrompt,
+		"<command-name>/review</command-name>\n<command-args>42</command-args>":   event.PhasePrompt,
+		"<local-command-caveat>Caveat: the messages below</local-command-caveat>": event.PhaseAutoPrompt,
 		"":                                       event.PhaseAutoPrompt,
 		"   ":                                    event.PhaseAutoPrompt,
 		"<task-notification>agent done":          event.PhaseAutoPrompt,
