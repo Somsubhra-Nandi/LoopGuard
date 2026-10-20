@@ -61,7 +61,10 @@ var (
 	emailRe   = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
 	// projectDirRe matches Claude Code's encoded project directory names
 	// (C--Users-name-work-repo), which spell out a full path.
-	projectDirRe = regexp.MustCompile(`(?i)\b[a-z]--users-[A-Za-z0-9-]+`)
+	// Windows (C--Users-name-...) and macOS/Linux (-Users-name-...,
+	// -home-name-...) encodings are both matched on every OS; group 1 is
+	// the separator before a Unix one, which is kept.
+	projectDirRe = regexp.MustCompile(`(?i)\b[a-z]--users-[A-Za-z0-9-]+|(^|[/\\\s"'=])-(?:users|home)-[A-Za-z0-9-]+`)
 	urlRe        = regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s"'<>|]+`)
 	wordSplit    = regexp.MustCompile(`[^A-Za-z0-9]+`)
 	// homeSegRe finds the username in a normalized path.
@@ -257,7 +260,7 @@ func (x *exporter) text(s string) string {
 	}
 	// URLs can name private hosts: keep that there was a URL, and which.
 	s = urlRe.ReplaceAllStringFunc(s, func(u string) string { return "<url:" + token(u)[2:10] + ">" })
-	s = projectDirRe.ReplaceAllString(s, "<project-dir>")
+	s = projectDirRe.ReplaceAllString(s, "${1}<project-dir>")
 	// Paths below a home directory become a stable hashed name.
 	s = homeDirRe.ReplaceAllStringFunc(s, func(m string) string {
 		sub := homeDirRe.FindStringSubmatch(m)

@@ -6,7 +6,6 @@ package replay
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -414,7 +413,7 @@ func RepoName(cwd string) string {
 	if len(parts) > 2 {
 		parts = parts[len(parts)-2:]
 	}
-	return filepath.ToSlash(strings.Join(parts, "/"))
+	return strings.Join(parts, "/")
 }
 
 // SortLoops orders loops by wasted time, then count, then stream and call.

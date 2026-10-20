@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -316,6 +317,43 @@ func TestLabelsAndEval(t *testing.T) {
 	}
 }
 
+// TestAnonymizeTextAllStyles runs the same anonymization on Windows-,
+// macOS-, and Linux-style sessions, on every OS: the paths come from the
+// transcripts, so where the test runs must not matter.
+func TestAnonymizeTextAllStyles(t *testing.T) {
+	styles := []struct {
+		name, cwd, home, user, sep string
+	}{
+		{"windows", `C:\Users\Jane Q Doe\Desktop\acmeshop`, `C:\Users\Jane Q Doe`, "Jane Q Doe", `\`},
+		{"macos", "/Users/janeqdoe/Desktop/acmeshop", "/Users/janeqdoe", "janeqdoe", "/"},
+		{"linux", "/home/janeqdoe/src/acmeshop", "/home/janeqdoe", "janeqdoe", "/"},
+	}
+	for _, st := range styles {
+		t.Run(st.name, func(t *testing.T) {
+			x := &exporter{paths: map[string]string{}, cwds: map[string]bool{}, words: map[string]string{}}
+			x.cwds[st.cwd] = true
+			x.learn(st.cwd)
+			x.fakePath("src"+st.sep+"pay.ts", st.cwd)
+			fwd := strings.ReplaceAll(st.cwd, `\`, "/")
+			enc := regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(strings.ReplaceAll(st.home, "Desktop", ""), "-")
+			tests := []struct{ in, want string }{
+				{`cd "` + st.cwd + `" && npm test`, `cd "/repo" && npm test`},
+				{"node " + fwd + "/src/pay.ts", "node /repo/src/file_1.ts"},
+				{"cat " + st.home + st.sep + ".npmrc", "cat /home/user/p_"},
+				{"ls ~/Desktop/acmeshop-api", "ls ~/Desktop/repo-api"},
+				{`git config user.name "` + st.user + `"`, `git config user.name "user"`},
+				{"cat ~/.claude/projects/" + enc + "-other/x.jsonl", "cat ~/.claude/projects/<project-dir>/x.jsonl"},
+				{"mail jane.doe@acme.example", "mail <email>"},
+			}
+			for _, tt := range tests {
+				if got := x.text(tt.in); !strings.HasPrefix(got, tt.want) {
+					t.Errorf("text(%q)\n got %q\nwant prefix %q", tt.in, got, tt.want)
+				}
+			}
+		})
+	}
+}
+
 func TestAnonymizeText(t *testing.T) {
 	x := &exporter{paths: map[string]string{}, cwds: map[string]bool{}, words: map[string]string{}}
 	cwd := `C:\Users\Jane Q Doe\Desktop\acmeshop`
@@ -332,6 +370,7 @@ func TestAnonymizeText(t *testing.T) {
 		{`curl https://internal.acme.example/api?id=7`, `curl <url:`},
 		{`cat ~/.claude/projects/C--Users-Jane-Q-Doe-Desktop-other/x.jsonl`, `cat ~/.claude/projects/<project-dir>/x.jsonl`},
 		{`mail jane.doe@acme.example`, `mail <email>`},
+		{`type C:\Users\JANEQD~1\AppData\Local\Temp\out.log`, `type /home/user/p_`}, // 8.3 short name
 	}
 	for _, tt := range tests {
 		got := x.text(tt.in)
