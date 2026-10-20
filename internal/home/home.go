@@ -12,34 +12,26 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"github.com/Somsubhra-Nandi/loopguard/internal/home/homedir"
 )
 
-// EnvHome overrides the data directory.
-const EnvHome = "LOOPGUARD_HOME"
+// Shared with the hook shim through package homedir.
+const (
+	EnvHome     = homedir.EnvHome
+	DaemonFile  = homedir.DaemonFile
+	TokenFile   = homedir.TokenFile
+	DBFile      = homedir.DBFile
+	LogDir      = homedir.LogDir
+	CaptureDir  = homedir.CaptureDir
+	CaptureFlag = homedir.CaptureFlag
+	BinDir      = homedir.BinDir
+)
 
 // Dir returns LoopGuard's data directory: $LOOPGUARD_HOME, or .loopguard in
 // the user's home directory (%USERPROFILE%\.loopguard on Windows).
-func Dir() (string, error) {
-	if h := os.Getenv(EnvHome); h != "" {
-		return h, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".loopguard"), nil
-}
-
-// File names inside the data directory.
-const (
-	DaemonFile = "daemon.json"
-	TokenFile  = "token"
-	DBFile     = "loopguard.db"
-	LogDir     = "logs"
-	CaptureDir = "capture"
-)
+func Dir() (string, error) { return homedir.Dir() }
 
 // DaemonInfo is the content of daemon.json, written by a running daemon.
 type DaemonInfo struct {
@@ -94,20 +86,10 @@ func writeAtomic(path string, b []byte) error {
 }
 
 // tokenBytes is the size of the random API token.
-const tokenBytes = 32
+const tokenBytes = homedir.TokenBytes
 
 // ReadToken reads the API token from <dir>/token.
-func ReadToken(dir string) (string, error) {
-	b, err := os.ReadFile(filepath.Join(dir, TokenFile))
-	if err != nil {
-		return "", err
-	}
-	tok := strings.TrimSpace(string(b))
-	if len(tok) != 2*tokenBytes {
-		return "", fmt.Errorf("%s: malformed token", TokenFile)
-	}
-	return tok, nil
-}
+func ReadToken(dir string) (string, error) { return homedir.ReadToken(dir) }
 
 // EnsureToken returns the API token, creating <dir>/token with a random
 // 32-byte (hex-encoded) token on first use. The file is readable only by
