@@ -219,3 +219,18 @@ func TestPending(t *testing.T) {
 }
 
 func approx(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
+
+func TestResumeAt(t *testing.T) {
+	s := New("k", event.AgentClaudeCode, config.Default())
+	s.ResumeAt(41)
+	ev := &event.Event{}
+	s.Assign(ev)
+	if ev.Seq != 42 {
+		t.Errorf("seq after ResumeAt(41) = %d, want 42", ev.Seq)
+	}
+	s.ResumeAt(10) // never backwards
+	s.Assign(ev)
+	if ev.Seq != 43 {
+		t.Errorf("seq after ResumeAt(10) = %d, want 43", ev.Seq)
+	}
+}

@@ -151,6 +151,15 @@ func New(key string, agent event.AgentKind, th config.Thresholds) *SessionState 
 // Seq returns the last assigned sequence number.
 func (s *SessionState) Seq() uint64 { return s.seq }
 
+// ResumeAt makes numbering continue after seq, for a session whose earlier
+// events were numbered by a previous state (an evicted actor or an earlier
+// daemon run). It never moves numbering backwards.
+func (s *SessionState) ResumeAt(seq uint64) {
+	if seq > s.seq {
+		s.seq = seq
+	}
+}
+
 // Assign gives ev the next sequence number and updates LastSeen.
 func (s *SessionState) Assign(ev *event.Event) {
 	s.seq++
