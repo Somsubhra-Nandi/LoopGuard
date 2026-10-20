@@ -113,13 +113,22 @@ func (d *RepeatedFailure) Observe(s *session.SessionState, c *event.ToolCall) []
 		Evidence: event.Evidence{
 			Family:     c.Family,
 			Commands:   cmds,
-			ErrorLines: c.ErrorSig.Lines,
+			ErrorLines: evidenceLines(c.ErrorSig),
 			Files:      files,
 			Seqs:       seqs,
 			Elapsed:    c.Event.ReceivedAt.Sub(first.Event.ReceivedAt),
 			Anchor:     anchor,
 		},
 	}}
+}
+
+// evidenceLines are the error lines a nudge shows: the signature's best
+// lines, else its key lines.
+func evidenceLines(sig *event.ErrorSignature) []string {
+	if len(sig.Best) > 0 {
+		return sig.Best
+	}
+	return sig.Lines
 }
 
 // existingLoop returns the repeated-failure loop of c's family whose anchor

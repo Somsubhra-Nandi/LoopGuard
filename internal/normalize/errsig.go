@@ -179,7 +179,78 @@ func signatureOfNormalized(norm string) *event.ErrorSignature {
 		Sim:   SimHash(simWords(masked, isKey), shingleWords),
 		Loc:   locHash(refs),
 		Lines: evidence,
+		Best:  bestLines(lines, isKey),
 	}
+}
+
+// maxBestLines is how many evidence lines a nudge shows.
+const maxBestLines = 3
+
+// bestLines picks the lines that say what went wrong, for nudge text: the
+// highest-scoring lines (evidenceScore), at most maxBestLines, in output
+// order. Assertion payloads and error messages beat test names, which
+// beat FAIL and summary lines (which score 0 and are never picked).
+func bestLines(lines []string, isKey []bool) []string {
+	type cand struct{ i, score int }
+	var cs []cand
+	seen := map[string]bool{}
+	for i, l := range lines {
+		l = strings.TrimSpace(l)
+		if l == "" || seen[l] {
+			continue
+		}
+		if s := evidenceScore(l, isKey[i]); s > 0 {
+			seen[l] = true
+			cs = append(cs, cand{i, s})
+		}
+	}
+	sort.SliceStable(cs, func(a, b int) bool { return cs[a].score > cs[b].score })
+	if len(cs) > maxBestLines {
+		cs = cs[:maxBestLines]
+	}
+	sort.Slice(cs, func(a, b int) bool { return cs[a].i < cs[b].i })
+	out := make([]string, len(cs))
+	for k, c := range cs {
+		out[k] = clip(strings.TrimSpace(lines[c.i]))
+	}
+	return out
+}
+
+var (
+	// Lines that carry the failure itself (score 4), per runner:
+	//   jest/vitest: Expected:/Received:; pytest: "E  …"; go test:
+	//   "x_test.go:N: … want/got"; cargo: left:/right:, assertion …
+	//   failed, error[E…]; tsc: error TSnnnn; any: SomeError: …, panic:.
+	payloadRe = regexp.MustCompile(`^(?:(?:Expected|Received|expected|received|Actual|actual)\b.*:|E\s|left:|right:|assertion .*failed|error\[E\d+\]|.*\berror TS\d+:|.*_test\.go:\d+:|\w*(?:Error|Exception|Failure)\b:|panic:|AssertionError)`)
+	// Test names and frames that locate it (score 2): jest's ● header, go's
+	// --- FAIL: TestX, cargo's panicked at, pytest's FAILED x - msg.
+	locateRe = regexp.MustCompile(`^(?:●|--- FAIL:|thread '.*' panicked at|FAILED \S+ - )`)
+	// Runner chatter that names no cause (score 0).
+	summaryRe = regexp.MustCompile(`^(?:FAIL\b|PASS\b|Tests?:|Test Suites:|Snapshots:|Time:|Ran all|test result:|error: test failed|error: could not compile|failures:|=+|For more information|note:|running \d+ tests?|ok\b|\d+ failed)`)
+	// Words that suggest an assertion (score 3).
+	assertWords = []string{"expected", "actual", "assert", " got ", " want ", "error:"}
+)
+
+// evidenceScore rates a normalized, trimmed output line as nudge evidence.
+func evidenceScore(l string, key bool) int {
+	switch {
+	case payloadRe.MatchString(l):
+		return 4
+	case summaryRe.MatchString(l):
+		return 0
+	case locateRe.MatchString(l):
+		return 2
+	}
+	lower := " " + strings.ToLower(l) + " "
+	for _, w := range assertWords {
+		if strings.Contains(lower, w) {
+			return 3
+		}
+	}
+	if key {
+		return 1
+	}
+	return 0
 }
 
 // fileRefRe finds source file references in masked lines: "path.ext:<LN>",
