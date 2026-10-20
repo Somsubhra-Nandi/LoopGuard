@@ -8,6 +8,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -54,6 +55,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) (code int) {
 		if hook {
 			return 0
 		}
+		if errors.Is(err, errSilent) {
+			return 1
+		}
 		fmt.Fprintf(stderr, "Error: %v\nRun 'loopguard --help' for usage.\n", err)
 		return 1
 	}
@@ -85,10 +89,11 @@ func newRootCmd(hookExit *int) *cobra.Command {
 	root.AddCommand(
 		newHookCmd(hookExit),
 		newDaemonCmd(),
-		stubCmd("init", "Install LoopGuard hooks into your agents' settings", "M2"),
-		stubCmd("uninstall", "Remove LoopGuard hooks from your agents' settings", "M2"),
-		stubCmd("doctor", "Check that LoopGuard is installed and working", "M2"),
-		stubCmd("status", "Show active sessions and recent loop signals", "M2"),
+		newInitCmd(),
+		newUninstallCmd(),
+		newDoctorCmd(),
+		newStatusCmd(),
+		newCaptureCmd(),
 		stubCmd("report [session]", "Show a session timeline: calls, loops, interventions, cost", "M4"),
 		newReplayCmd(),
 		newLabelCmd(),

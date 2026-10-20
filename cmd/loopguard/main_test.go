@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +25,18 @@ func TestMain(m *testing.M) {
 	// In-process hook runs must never start a real daemon (it would be this
 	// test binary).
 	hookSpawn = func(string) error { return nil }
-	os.Exit(m.Run())
+	// No test may touch the developer's real LoopGuard home or Claude Code
+	// settings: both default to a temporary directory (tests that need
+	// their own still set them).
+	sandbox, err := os.MkdirTemp("", "loopguard-cli-test")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("LOOPGUARD_HOME", filepath.Join(sandbox, "home"))
+	os.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(sandbox, "claude"))
+	code := m.Run()
+	os.RemoveAll(sandbox)
+	os.Exit(code)
 }
 
 // isolate points LoopGuard at an empty home, so hook tests never talk to
@@ -161,10 +173,6 @@ func TestStubSubcommands(t *testing.T) {
 		args      []string
 		milestone string
 	}{
-		{[]string{"init"}, "M2"},
-		{[]string{"uninstall"}, "M2"},
-		{[]string{"doctor"}, "M2"},
-		{[]string{"status"}, "M2"},
 		{[]string{"report"}, "M4"},
 		{[]string{"report", "abc123"}, "M4"},
 		{[]string{"pause"}, "M3"},
