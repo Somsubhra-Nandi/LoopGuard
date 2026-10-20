@@ -17,7 +17,6 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter/claudecode"
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/event"
-	"github.com/Somsubhra-Nandi/loopguard/internal/pipeline"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
 
@@ -49,7 +48,7 @@ func newTestManager(t *testing.T, withStore bool) (*Manager, *store.Store, *stor
 		}
 		w = st.NewWriter(store.WriterOptions{})
 	}
-	m := newManager(pipeline.New(th), th.Policy.NudgeThreshold, st, w, slog.New(slog.NewTextHandler(io.Discard, nil)), newMetrics(), 0)
+	m := newManager(config.NewLoader(t.TempDir(), config.LoaderOptions{Thresholds: &th}), st, w, slog.New(slog.NewTextHandler(io.Discard, nil)), newMetrics(), 0)
 	t.Cleanup(func() {
 		m.Close(context.Background())
 		w.Close()

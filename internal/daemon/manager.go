@@ -16,9 +16,11 @@ import (
 	"github.com/cespare/xxhash/v2"
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter"
+	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/event"
 	"github.com/Somsubhra-Nandi/loopguard/internal/normalize"
 	"github.com/Somsubhra-Nandi/loopguard/internal/pipeline"
+	"github.com/Somsubhra-Nandi/loopguard/internal/policy"
 	"github.com/Somsubhra-Nandi/loopguard/internal/redact"
 	"github.com/Somsubhra-Nandi/loopguard/internal/session"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
@@ -30,7 +32,7 @@ const (
 	DefaultIdle     = 2 * time.Hour
 	maxFileHashSize = 2 << 20 // LLD §4.5
 	maxDigest       = 300     // calls.input_digest
-	maxRecent       = 50      // signals and would-have decisions kept per live session
+	maxRecent       = 50      // signals and interventions kept per live session
 )
 
 // reply is what the HTTP handler sends back to the shim.
@@ -43,22 +45,26 @@ type job struct {
 	ev    *event.Event
 	ad    adapter.Adapter
 	reply chan reply // buffered (1): the actor never blocks on a reply
+	// newTurn (no event): the parent session got a human prompt, so this
+	// subagent stream starts a new turn too.
+	newTurn bool
 }
 
 // Manager routes events to one actor per session. Each actor processes
 // its session's events strictly in order on its own goroutine, so the
 // detectors' state needs no locks, and sessions don't wait on each other.
 type Manager struct {
-	pipe  *pipeline.Pipeline
-	st    *store.Store  // nil: memory-only
-	w     *store.Writer // nil: memory-only
-	log   *slog.Logger
-	met   *metrics
-	idle  time.Duration
-	clock func() time.Time
-	// nudgeAt is the severity from which a signal counts as a loop in
-	// loops_detected, as in replay (weaker ones are "below threshold").
-	nudgeAt float64
+	cfg    *config.Loader
+	pauses *pauses
+	st     *store.Store  // nil: memory-only
+	w      *store.Writer // nil: memory-only
+	log    *slog.Logger
+	met    *metrics
+	idle   time.Duration
+	clock  func() time.Time
+
+	pipesMu sync.Mutex
+	pipes   map[uint64]*pipeline.Pipeline // by config.Effective.Key
 
 	mu     sync.Mutex
 	actors map[string]*actor
@@ -66,11 +72,29 @@ type Manager struct {
 	wg     sync.WaitGroup
 }
 
-func newManager(pipe *pipeline.Pipeline, nudgeAt float64, st *store.Store, w *store.Writer, log *slog.Logger, met *metrics, idle time.Duration) *Manager {
+func newManager(cfg *config.Loader, st *store.Store, w *store.Writer, log *slog.Logger, met *metrics, idle time.Duration) *Manager {
 	if idle <= 0 {
 		idle = DefaultIdle
 	}
-	return &Manager{pipe: pipe, nudgeAt: nudgeAt, st: st, w: w, log: log, met: met, idle: idle, clock: time.Now, actors: map[string]*actor{}}
+	return &Manager{cfg: cfg, pauses: &pauses{}, st: st, w: w, log: log, met: met, idle: idle, clock: time.Now,
+		pipes: map[uint64]*pipeline.Pipeline{}, actors: map[string]*actor{}}
+}
+
+// pipeFor returns the pipeline for a configuration. Pipelines hold no
+// session state, so sessions with the same thresholds share one; a config
+// change makes a new one.
+func (m *Manager) pipeFor(eff config.Effective) *pipeline.Pipeline {
+	m.pipesMu.Lock()
+	defer m.pipesMu.Unlock()
+	p := m.pipes[eff.Key]
+	if p == nil {
+		if len(m.pipes) >= 64 {
+			m.pipes = map[uint64]*pipeline.Pipeline{} // many edits over a long run
+		}
+		p = pipeline.New(eff.Thresholds)
+		m.pipes[eff.Key] = p
+	}
+	return p
 }
 
 // sessionKey is "agent:session_id", or "agent:session_id/agent_id" for a
@@ -87,6 +111,10 @@ func sessionKey(ev *event.Event) string {
 // Submit queues ev on its session's actor and returns the channel the
 // reply arrives on. It never blocks: if the actor's queue is full or the
 // manager is closed it returns nil, and the caller answers "none".
+//
+// A human prompt to a main session also starts a new turn in its live
+// subagent streams, so a loop there doesn't stay blocked into the next
+// turn.
 func (m *Manager) Submit(ev *event.Event, ad adapter.Adapter) <-chan reply {
 	j := job{ev: ev, ad: ad, reply: make(chan reply, 1)}
 	key := sessionKey(ev)
@@ -103,6 +131,16 @@ func (m *Manager) Submit(ev *event.Event, ad adapter.Adapter) <-chan reply {
 		go a.run()
 	}
 	a.touch(m.clock())
+	if ev.Phase == event.PhasePrompt && ev.AgentID == "" {
+		for k, sub := range m.actors {
+			if strings.HasPrefix(k, key+"/") {
+				select {
+				case sub.in <- job{newTurn: true}:
+				default:
+				}
+			}
+		}
+	}
 	select {
 	case a.in <- j:
 		return j.reply
@@ -172,21 +210,24 @@ func (m *Manager) Close(ctx context.Context) {
 }
 
 // liveSummary is what the API shows for a live session in memory-only
-// mode, and the recent would-have decisions in any mode.
+// mode, and the recent interventions (real and would-have) in any mode.
 type liveSummary struct {
 	store.Session
-	Signals   []store.Signal       `json:"signals,omitempty"`
-	WouldHave []store.Intervention `json:"would_have,omitempty"`
+	Mode          string               `json:"mode,omitempty"`     // observe | enforce | off, at the latest event
+	ModeWhy       string               `json:"mode_why,omitempty"` // why, in words
+	Signals       []store.Signal       `json:"signals,omitempty"`
+	Interventions []store.Intervention `json:"interventions,omitempty"`
 }
 
 // actor owns one session's state. Only its goroutine touches state and the
 // fields below it; the summary is shared with the API under mu.
 type actor struct {
-	m     *Manager
-	key   string
-	in    chan job
-	last  atomic.Int64 // unix nanos of the last submitted event
-	state *session.SessionState
+	m        *Manager
+	key      string
+	in       chan job
+	last     atomic.Int64 // unix nanos of the last submitted event
+	state    *session.SessionState
+	outcomes *policy.Outcomes
 
 	mu  sync.Mutex
 	sum liveSummary
@@ -217,7 +258,7 @@ func (a *actor) summary() liveSummary {
 	defer a.mu.Unlock()
 	s := a.sum
 	s.Signals = append([]store.Signal(nil), s.Signals...)
-	s.WouldHave = append([]store.Intervention(nil), s.WouldHave...)
+	s.Interventions = append([]store.Intervention(nil), s.Interventions...)
 	return s
 }
 
@@ -227,13 +268,26 @@ func (a *actor) run() {
 	for j := range a.in {
 		a.handle(j)
 	}
+	// Evicted or shutting down: the state that would decide the pending
+	// outcomes is going away.
+	a.mu.Lock()
+	a.resolve(a.outcomes.End())
+	a.mu.Unlock()
+}
+
+// newState starts empty session state (and outcome tracking) for the
+// actor's session.
+func (a *actor) newState() {
+	eff := a.m.cfg.For("")
+	a.state = a.m.pipeFor(eff).NewSession(a.key, event.AgentKind(a.sum.Agent))
+	a.outcomes = policy.NewOutcomes(eff.Thresholds.Detectors.SimHashMaxDistance)
 }
 
 // resume starts the session state, continuing a session the store already
 // knows (an evicted actor, or an earlier daemon run): the seq numbering
 // continues, and so do the counters. Detector state starts empty.
 func (a *actor) resume() {
-	a.state = a.m.pipe.NewSession(a.key, event.AgentKind(a.sum.Agent))
+	a.newState()
 	if a.m.st == nil {
 		return
 	}
@@ -248,9 +302,7 @@ func (a *actor) resume() {
 	}
 	if prev, err := a.m.st.GetSession(ctx, a.key); err == nil && prev.Key == a.key {
 		a.mu.Lock()
-		sig, wh := a.sum.Signals, a.sum.WouldHave
 		a.sum.Session = prev
-		a.sum.Signals, a.sum.WouldHave = sig, wh
 		a.mu.Unlock()
 	}
 }
@@ -259,6 +311,13 @@ func (a *actor) resume() {
 // recovered: the reply is "none", and the session state starts over (LLD
 // §9.2), keeping the numbering.
 func (a *actor) handle(j job) {
+	if j.newTurn {
+		a.state.NewTurn()
+		a.mu.Lock()
+		a.resolve(a.outcomes.End())
+		a.mu.Unlock()
+		return
+	}
 	replied := false
 	defer func() {
 		if r := recover(); r != nil {
@@ -268,14 +327,35 @@ func (a *actor) handle(j job) {
 				j.reply <- reply{}
 			}
 			seq := a.state.Seq()
-			a.state = a.m.pipe.NewSession(a.key, event.AgentKind(a.sum.Agent))
+			pending := a.outcomes.End()
+			a.newState()
 			a.state.ResumeAt(seq)
+			a.mu.Lock()
+			a.resolve(pending)
+			a.mu.Unlock()
 		}
 	}()
 
 	ev := j.ev
-	res := a.m.pipe.Handle(a.state, ev, a.fileHash(ev))
-	d := observeOnly(pick(res.Decisions))
+	repo := a.repoOf(ev.Cwd)
+	eff := a.m.cfg.For(repo)
+	mode := a.m.sessionMode(eff, ev, repo, ev.ReceivedAt)
+	if mode.Mode == config.ModeOff {
+		// The kill switch (enabled: false): nothing is processed or stored.
+		j.reply <- reply{}
+		replied = true
+		a.mu.Lock()
+		a.sum.Mode, a.sum.ModeWhy = mode.Mode, mode.Why
+		a.mu.Unlock()
+		return
+	}
+
+	a.state.Enforce = mode.Mode == config.ModeEnforce
+	res := a.m.pipeFor(eff).Handle(a.state, ev, a.fileHash(ev))
+	d := pick(res.Decisions)
+	if !a.state.Enforce {
+		d = observeOnly(d) // the policy already returns none; belt and braces
+	}
 	out, code := j.ad.Render(ev, d)
 	j.reply <- reply{stdout: out, exit: code}
 	replied = true
@@ -286,24 +366,39 @@ func (a *actor) handle(j job) {
 	for _, d := range res.Decisions {
 		a.m.met.decision(string(d.WouldHave))
 	}
-	a.record(ev, res)
+	resolved := a.outcomes.Observe(a.state, res.Call, res.Signals, res.Decisions)
+	if ev.Phase == event.PhasePrompt || ev.Phase == event.PhaseSessionEnd {
+		resolved = append(resolved, a.outcomes.End()...)
+	}
+	resolved = append(resolved, a.outcomes.Add(a.state, res.Decisions)...)
+	a.record(ev, res, mode, eff.Thresholds.Policy.NudgeThreshold, resolved)
 }
 
-// pick returns the decision to render: the one with the strongest action
-// (enforce mode), else the first.
+var actionRank = map[event.Action]int{event.ActionNone: 0, event.ActionNudge: 1, event.ActionDeny: 2, event.ActionHalt: 3}
+
+// pick returns the decision to render: the one with the strongest action,
+// else the first. Nudges for several loops on one call are joined into one
+// message (within the template cap).
 func pick(ds []event.Decision) event.Decision {
-	rank := map[event.Action]int{event.ActionNone: 0, event.ActionNudge: 1, event.ActionDeny: 2, event.ActionHalt: 3}
 	best := event.Decision{Action: event.ActionNone}
 	for _, d := range ds {
-		if rank[d.Action] > rank[best.Action] {
+		if actionRank[d.Action] > actionRank[best.Action] {
 			best = d
+		}
+	}
+	if best.Action == event.ActionNudge {
+		for _, d := range ds {
+			if d.Action == event.ActionNudge && d.LoopKey != best.LoopKey && d.Message != "" &&
+				utf8.RuneCountInString(best.Message)+utf8.RuneCountInString(d.Message)+2 <= policy.MaxMessage {
+				best.Message += "\n\n" + d.Message
+			}
 		}
 	}
 	return best
 }
 
-// observeOnly enforces M2's invariant: the daemon never returns a decision
-// other than "none", whatever the policy says. TODO(M3): enforce mode.
+// observeOnly enforces observe mode's invariant: no decision other than
+// "none" reaches the agent, whatever the policy says.
 func observeOnly(d event.Decision) event.Decision {
 	d.Action = event.ActionNone
 	d.Notify = false
@@ -368,10 +463,11 @@ func within(path, dir string) bool {
 
 // record updates the live summary and queues the event's rows for the
 // store. It runs after the reply, off the hook's critical path.
-func (a *actor) record(ev *event.Event, res pipeline.Result) {
+func (a *actor) record(ev *event.Event, res pipeline.Result, mode config.ModeInfo, nudgeAt float64, resolved []policy.Resolved) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	s := &a.sum
+	s.Mode, s.ModeWhy = mode.Mode, mode.Why
 	if s.StartedAt.IsZero() || ev.ReceivedAt.Before(s.StartedAt) {
 		s.StartedAt = ev.ReceivedAt
 	}
@@ -402,7 +498,7 @@ func (a *actor) record(ev *event.Event, res pipeline.Result) {
 		a.m.w.Enqueue(callRow(a.key, c))
 	}
 	for _, sig := range res.Signals {
-		if !a.loops[sig.LoopKey] && sig.Severity >= a.m.nudgeAt {
+		if !a.loops[sig.LoopKey] && sig.Severity >= nudgeAt {
 			a.loops[sig.LoopKey] = true
 			s.LoopsDetected++
 		}
@@ -419,12 +515,34 @@ func (a *actor) record(ev *event.Event, res pipeline.Result) {
 		if msg == "" {
 			msg = d.Reason
 		}
+		// enforce: the action was taken (it reached the agent unless the
+		// reply was late); observe: what enforce mode would have done.
+		m := store.ModeObserve
+		if d.Action != event.ActionNone {
+			m = store.ModeEnforce
+		}
 		row := store.Intervention{SessionKey: a.key, Seq: d.Seq, TS: ev.ReceivedAt, LoopKey: d.LoopKey, Detector: d.Detector,
-			Action: string(d.WouldHave), Mode: store.ModeObserve, Reason: redact.String(d.Reason), Message: redact.String(msg)}
-		s.WouldHave = appendRecent(s.WouldHave, row)
+			Action: string(d.WouldHave), Mode: m, Reason: redact.String(d.Reason), Message: redact.String(msg)}
+		s.Interventions = appendRecent(s.Interventions, row)
 		a.m.w.Enqueue(row)
 	}
+	a.resolve(resolved)
 	a.m.w.Enqueue(s.Session)
+}
+
+// resolve records the outcomes of earlier interventions, in the store and
+// the live summary. The caller holds a.mu.
+func (a *actor) resolve(rs []policy.Resolved) {
+	for _, r := range rs {
+		d := r.Decision
+		a.m.w.Enqueue(store.OutcomeUpdate{SessionKey: a.key, Seq: d.Seq, LoopKey: d.LoopKey, Action: string(d.WouldHave), Outcome: r.Outcome})
+		for i := range a.sum.Interventions {
+			iv := &a.sum.Interventions[i]
+			if iv.Seq == d.Seq && iv.LoopKey == d.LoopKey && iv.Action == string(d.WouldHave) && iv.Outcome == "" {
+				iv.Outcome = r.Outcome
+			}
+		}
+	}
 }
 
 func appendRecent[T any](xs []T, x T) []T {

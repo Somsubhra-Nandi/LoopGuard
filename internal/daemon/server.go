@@ -68,11 +68,12 @@ func (d *server) close() {
 	}
 }
 
-// janitor evicts idle actors.
+// janitor evicts idle actors and re-reads the pauses (in case one was
+// written while the daemon couldn't be told, and to drop expired ones).
 func (d *server) janitor(ctx context.Context) {
 	every := d.mgr.idle / 4
-	if every > time.Minute {
-		every = time.Minute
+	if every > pauseReload {
+		every = pauseReload
 	}
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -82,8 +83,29 @@ func (d *server) janitor(ctx context.Context) {
 			return
 		case <-t.C:
 			d.mgr.evictIdle()
+			if err := d.mgr.pauses.load(ctx, d.st, time.Now()); err != nil && ctx.Err() == nil {
+				d.log.Warn("reloading pauses", "err", err)
+			}
 		}
 	}
+}
+
+// pauseReload is how often the janitor re-reads the pauses table.
+const pauseReload = 30 * time.Second
+
+func (d *server) listPauses(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"pauses": nonNil(d.mgr.pauses.all())})
+}
+
+// reloadPauses re-reads the pauses table; `loopguard pause` and `resume`
+// call it after writing the table, so the change applies at once.
+func (d *server) reloadPauses(w http.ResponseWriter, r *http.Request) {
+	if err := d.mgr.pauses.load(r.Context(), d.st, time.Now()); err != nil {
+		d.log.Warn("reloading pauses", "err", err)
+		http.Error(w, "store error", http.StatusInternalServerError)
+		return
+	}
+	d.listPauses(w, r)
 }
 
 func (d *server) routes() http.Handler {
@@ -93,6 +115,8 @@ func (d *server) routes() http.Handler {
 	mux.Handle("GET /v1/sessions", d.auth(d.sessions))
 	mux.Handle("GET /v1/sessions/{id}", d.auth(d.sessionDetail))
 	mux.Handle("GET /v1/decisions", d.auth(d.decisions))
+	mux.Handle("GET /v1/pauses", d.auth(d.listPauses))
+	mux.Handle("POST /v1/pauses/reload", d.auth(d.reloadPauses))
 	mux.Handle("GET /metrics", d.auth(d.metrics))
 	mux.Handle("POST /v1/shutdown", d.auth(d.shutdownHandler))
 	return d.hostCheck(mux)
@@ -226,7 +250,9 @@ func budget(header string) time.Duration {
 // sessionView is a session in API responses.
 type sessionView struct {
 	store.Session
-	Active bool `json:"active"`
+	Active  bool   `json:"active"`
+	Mode    string `json:"mode,omitempty"` // live sessions: the mode at the latest event
+	ModeWhy string `json:"mode_why,omitempty"`
 }
 
 func (d *server) sessions(w http.ResponseWriter, r *http.Request) {
@@ -253,15 +279,15 @@ func (d *server) sessions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, s := range rows {
-			_, active := live[s.Key]
-			out = append(out, sessionView{Session: s, Active: active})
+			l, active := live[s.Key]
+			out = append(out, sessionView{Session: s, Active: active, Mode: l.Mode, ModeWhy: l.ModeWhy})
 		}
 	} else {
 		for _, s := range live {
 			if s.LastSeenAt.Before(since) || (repo != "" && s.Repo != repo) {
 				continue
 			}
-			out = append(out, sessionView{Session: s.Session, Active: true})
+			out = append(out, sessionView{Session: s.Session, Active: true, Mode: s.Mode, ModeWhy: s.ModeWhy})
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].LastSeenAt.After(out[j].LastSeenAt) })
 	}
@@ -291,8 +317,8 @@ func (d *server) sessionDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"session": sessionView{Session: ls.Session, Active: true}, "signals": nonNil(ls.Signals),
-			"interventions": nonNil(ls.WouldHave), "store": d.storeMode(),
+			"session": sessionView{Session: ls.Session, Active: true, Mode: ls.Mode, ModeWhy: ls.ModeWhy}, "signals": nonNil(ls.Signals),
+			"interventions": nonNil(ls.Interventions), "store": d.storeMode(),
 		})
 		return
 	}
@@ -316,9 +342,9 @@ func (d *server) sessionDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "store error", http.StatusInternalServerError)
 		return
 	}
-	_, active := live[s.Key]
+	l, active := live[s.Key]
 	writeJSON(w, http.StatusOK, map[string]any{
-		"session": sessionView{Session: s, Active: active}, "calls": calls, "signals": sigs,
+		"session": sessionView{Session: s, Active: active, Mode: l.Mode, ModeWhy: l.ModeWhy}, "calls": calls, "signals": sigs,
 		"interventions": ivs, "store": d.storeMode(),
 	})
 }
@@ -379,7 +405,7 @@ func (d *server) decisions(w http.ResponseWriter, r *http.Request) {
 		out = rows
 	} else {
 		for _, s := range d.mgr.Live() {
-			out = append(out, s.WouldHave...)
+			out = append(out, s.Interventions...)
 		}
 		sort.SliceStable(out, func(i, j int) bool { return out[i].TS.After(out[j].TS) })
 		if len(out) > limit {

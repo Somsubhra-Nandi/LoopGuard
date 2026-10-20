@@ -22,7 +22,6 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/capture"
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
-	"github.com/Somsubhra-Nandi/loopguard/internal/pipeline"
 	"github.com/Somsubhra-Nandi/loopguard/internal/proc"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
@@ -43,9 +42,11 @@ type Options struct {
 	Capture bool
 	// Log receives the daemon's structured logs; nil logs to
 	// <home>/logs/daemon.log only.
-	Log         *slog.Logger
-	Thresholds  *config.Thresholds // nil: config.Default()
-	IdleTimeout time.Duration      // actor eviction (0: DefaultIdle)
+	Log *slog.Logger
+	// Thresholds, if set, replaces the thresholds from config.yaml (tests);
+	// the mode still comes from the config files.
+	Thresholds  *config.Thresholds
+	IdleTimeout time.Duration // actor eviction (0: DefaultIdle)
 	// Ready, if set, is called once the daemon is listening and daemon.json
 	// is written.
 	Ready func(home.DaemonInfo)
@@ -104,22 +105,45 @@ func Run(ctx context.Context, o Options) error {
 		}})
 	}
 
-	th := config.Default()
-	if o.Thresholds != nil {
-		th = *o.Thresholds
-	}
+	// config.yaml and the repos' .loopguard.yaml, re-read when they change.
+	// An invalid file is logged and skipped (defaults: observe mode).
+	cfg := config.NewLoader(o.Home, config.LoaderOptions{
+		Thresholds: o.Thresholds,
+		OnIssue: func(path string, err error, warnings []string) {
+			if err != nil {
+				log.Warn("config file is invalid; ignoring it", "path", path, "err", err)
+			}
+			for _, w := range warnings {
+				log.Warn("config file", "path", path, "warning", w)
+			}
+		},
+	})
+	eff := cfg.For("")
 	met := newMetrics()
 	d := &server{
 		token:    token,
 		homeID:   id,
 		version:  o.Version,
 		adapters: adapter.NewRegistry(claudecode.New()),
-		mgr:      newManager(pipeline.New(th), th.Policy.NudgeThreshold, st, w, log, met, o.IdleTimeout),
+		mgr:      newManager(cfg, st, w, log, met, o.IdleTimeout),
 		st:       st,
 		w:        w,
 		met:      met,
 		log:      log,
 		started:  time.Now().UTC(),
+	}
+	if st != nil {
+		sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// Outcomes still open were being tracked by a daemon that is gone.
+		if n, err := st.CloseOpenOutcomes(sctx); err != nil {
+			log.Warn("closing open intervention outcomes", "err", err)
+		} else if n > 0 {
+			log.Info("interventions from an earlier run marked outcome unknown", "count", n)
+		}
+		if err := d.mgr.pauses.load(sctx, st, time.Now()); err != nil {
+			log.Warn("loading pauses", "err", err)
+		}
+		cancel()
 	}
 	uh, _ := os.UserHomeDir()
 	d.capture = capture.New(capture.Dir(o.Home), uh)
@@ -144,8 +168,9 @@ func Run(ctx context.Context, o Options) error {
 		d.close()
 		return fmt.Errorf("writing %s: %w", home.DaemonFile, err)
 	}
+	mode := eff.ModeAt(time.Now())
 	log.Info("daemon started", "pid", info.PID, "port", info.Port, "version", o.Version,
-		"store", d.storeMode(), "capture", d.captureOn.Enabled())
+		"store", d.storeMode(), "capture", d.captureOn.Enabled(), "mode", mode.Mode, "mode_why", mode.Why)
 	if o.Ready != nil {
 		o.Ready(info)
 	}
