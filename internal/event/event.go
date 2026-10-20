@@ -27,6 +27,10 @@ const (
 	PhaseSessionEnd   Phase = "session_end"
 	PhaseStop         Phase = "stop"
 	PhasePrompt       Phase = "prompt"
+	// PhaseAutoPrompt is a prompt submission that isn't a human turn (an
+	// empty prompt, or injected content such as a task notification). It
+	// doesn't reset loop state.
+	PhaseAutoPrompt Phase = "auto_prompt"
 )
 
 // Normalized tool names. MCP tools are "mcp:<server>:<tool>" and anything

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -81,6 +82,9 @@ func parseAt(raw []byte, now time.Time) (*event.Event, error) {
 		ev.Model = model(m["model"])
 	case event.PhasePrompt:
 		ev.Prompt = clip(str(m, "prompt"), maxPrompt)
+		if !humanPrompt(ev.Prompt) {
+			ev.Phase = event.PhaseAutoPrompt
+		}
 	case event.PhasePre, event.PhasePost, event.PhasePostFailure:
 		ev.ToolName = ToolName(str(m, "tool_name"))
 		ev.ToolUseID = str(m, "tool_use_id")
@@ -99,6 +103,27 @@ func parseAt(raw []byte, now time.Time) (*event.Event, error) {
 		}
 	}
 	return ev, nil
+}
+
+// injectedPrefixes start prompt text that Claude Code submits on its own
+// rather than the human typing it (the same shapes replay ignores as turn
+// boundaries, LLD §14).
+var injectedPrefixes = []string{"<task-notification>", "<system-reminder>", "<local-command-"}
+
+// humanPrompt reports whether a UserPromptSubmit prompt is a human turn:
+// non-empty and not injected content. Slash commands count; the human
+// typed them.
+func humanPrompt(p string) bool {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return false
+	}
+	for _, pre := range injectedPrefixes {
+		if strings.HasPrefix(p, pre) {
+			return false
+		}
+	}
+	return true
 }
 
 // str returns m[key] if it is a JSON string, else "".

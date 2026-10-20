@@ -37,7 +37,8 @@ type output struct {
 //   - nudge (post / post_failure): additionalContext next to the tool result.
 //   - deny (pre): permissionDecision "deny" with the message as the reason.
 //   - halt (pre / post / post_failure / batch_end): continue:false with a
-//     stopReason, and a systemMessage for the user.
+//     stopReason, and a systemMessage for the user; on a pre, the action
+//     is also denied.
 //   - Notify adds a terminal notification sequence.
 //
 // An action that doesn't apply to the event's phase (a deny on a post, a
@@ -64,6 +65,16 @@ func Render(ev *event.Event, d event.Decision) (stdout []byte, exitCode int) {
 		o.Continue = &f
 		o.StopReason = clip(d.Message, maxContext)
 		o.SystemMessage = "LoopGuard halted this session: " + short(d)
+		if ev.Phase == event.PhasePre {
+			// A halt is decided on the looping action itself: deny it too, so
+			// it doesn't run while the turn stops. The full text is already in
+			// stopReason; the reason only needs the summary.
+			o.HookSpecificOutput = &hookSpecific{
+				HookEventName:            "PreToolUse",
+				PermissionDecision:       "deny",
+				PermissionDecisionReason: "LoopGuard halted this session: " + short(d),
+			}
+		}
 	}
 	if d.Notify && d.Message != "" {
 		o.TerminalSequence = "\x1b]777;notify;LoopGuard;" + terminalSafe(d.Message) + "\a"

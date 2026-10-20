@@ -34,7 +34,8 @@ func TestRender(t *testing.T) {
 		},
 		{
 			name: "halt on pre", ev: ev(event.PhasePre), d: event.Decision{Action: event.ActionHalt, Message: "Stuck.\nDetails", Reason: "stuck on a failing test"},
-			want: `{"continue":false,"stopReason":"Stuck.\nDetails","systemMessage":"LoopGuard halted this session: stuck on a failing test"}`,
+			want: `{"continue":false,"stopReason":"Stuck.\nDetails","systemMessage":"LoopGuard halted this session: stuck on a failing test",` +
+				`"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"LoopGuard halted this session: stuck on a failing test"}}`,
 		},
 		{
 			name: "halt on batch end without reason", ev: ev(event.PhaseBatchEnd), d: event.Decision{Action: event.ActionHalt, Message: "Stuck on npm test.\nMore"},

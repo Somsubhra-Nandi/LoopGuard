@@ -148,3 +148,22 @@ func dirExists(p string) bool {
 	fi, err := os.Stat(p)
 	return err == nil && fi.IsDir()
 }
+
+func TestPromptTurnBoundaries(t *testing.T) {
+	for prompt, want := range map[string]event.Phase{
+		"fix the failing test":                   event.PhasePrompt,
+		"/review":                                event.PhasePrompt,
+		"<str:230>":                              event.PhasePrompt, // structure-only golden payloads
+		"":                                       event.PhaseAutoPrompt,
+		"   ":                                    event.PhaseAutoPrompt,
+		"<task-notification>agent done":          event.PhaseAutoPrompt,
+		"  <system-reminder>x</system-reminder>": event.PhaseAutoPrompt,
+		"<local-command-stdout>ok</local-command-stdout>": event.PhaseAutoPrompt,
+	} {
+		b, _ := json.Marshal(map[string]string{"session_id": "s", "hook_event_name": "UserPromptSubmit", "prompt": prompt})
+		ev, err := Parse(b)
+		if err != nil || ev.Phase != want {
+			t.Errorf("prompt %q: phase %q, %v; want %q", prompt, ev.Phase, err, want)
+		}
+	}
+}
