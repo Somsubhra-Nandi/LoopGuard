@@ -41,6 +41,8 @@ type File struct {
 	PollingPatterns     *[]string `yaml:"polling_patterns"`
 	ReadOnlyCommands    *[]string `yaml:"read_only_commands"`
 	ErrorMarkerFamilies *[]string `yaml:"error_marker_families"`
+	// SlowFamilies never halt on time. A repo file may add to the list.
+	SlowFamilies *[]string `yaml:"slow_families"`
 
 	// Read in later milestones (M4: budgets; notifications; retention);
 	// accepted now so a config written from LLD §12 is valid.

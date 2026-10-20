@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 )
@@ -109,6 +110,7 @@ func (c Config) Apply(f File, source string) Config {
 	setList(&th.PollingPatterns, f.PollingPatterns)
 	setList(&th.ReadOnlyCommands, f.ReadOnlyCommands)
 	setList(&th.ErrorMarkerFamilies, f.ErrorMarkerFamilies)
+	setList(&th.SlowFamilies, f.SlowFamilies)
 	return c
 }
 
@@ -226,6 +228,16 @@ func (c Config) Tighten(f File, source string) (Config, []string) {
 		}
 		if p.ResetProgress != nil {
 			ignore("policy.reset_progress", globalOnly)
+		}
+	}
+	// The one list a repo may extend: a repo knows its own slow commands,
+	// and slow families only lose the time-based halt (counts still halt).
+	if f.SlowFamilies != nil {
+		for _, fam := range *f.SlowFamilies {
+			if !slices.Contains(th.SlowFamilies, fam) {
+				// Clip: never write into the global config's backing array.
+				th.SlowFamilies = append(slices.Clip(th.SlowFamilies), fam)
+			}
 		}
 	}
 	for key, set := range map[string]bool{

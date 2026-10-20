@@ -23,6 +23,10 @@ type Thresholds struct {
 	// runners) for which an "Error:" line counts as a soft failure. Other
 	// programs print "Error:" lines as ordinary output.
 	ErrorMarkerFamilies []string
+
+	// SlowFamilies are command-family prefixes (long builds, e2e suites)
+	// whose loops never halt on time, only on counts (LLD §7.1).
+	SlowFamilies []string
 }
 
 // DetectorThresholds configures the detectors.
@@ -90,7 +94,9 @@ type PolicyThresholds struct {
 	// HaltAfterDenyOccurrences: loop occurrences after the first deny before
 	// halting.
 	HaltAfterDenyOccurrences int
-	// HaltAfterMinutes halts a denied loop that has lasted this long.
+	// HaltAfterMinutes halts a denied loop that has lasted this long, once
+	// a deny was delivered; the limit grows to 3× the command's median run
+	// time for slow commands (LLD §7.1).
 	HaltAfterMinutes float64
 	// MaxNudgesPerTurn caps nudges across all loops in one human turn.
 	MaxNudgesPerTurn int
