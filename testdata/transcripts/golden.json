@@ -28,15 +28,15 @@
     "failure_families": [
       {
         "family": "node",
-        "runs": 13,
-        "failures": 5,
+        "runs": 23,
+        "failures": 10,
         "soft_failures": 0,
         "polling": false
       },
       {
-        "family": "set-location",
-        "runs": 7,
-        "failures": 5,
+        "family": "python",
+        "runs": 83,
+        "failures": 9,
         "soft_failures": 0,
         "polling": false
       },
@@ -49,49 +49,49 @@
       },
       {
         "family": "sed",
-        "runs": 34,
+        "runs": 36,
         "failures": 3,
         "soft_failures": 0,
         "polling": false
       },
       {
-        "family": "docker logs",
-        "runs": 6,
+        "family": "grep",
+        "runs": 122,
         "failures": 2,
         "soft_failures": 0,
         "polling": false
       },
       {
-        "family": "q_3c646bbf",
-        "runs": 6,
+        "family": "docker logs",
+        "runs": 5,
         "failures": 2,
         "soft_failures": 0,
         "polling": false
       },
       {
         "family": "q_42c93e93",
-        "runs": 4,
+        "runs": 3,
         "failures": 2,
         "soft_failures": 0,
         "polling": false
       },
       {
-        "family": "grep",
-        "runs": 112,
-        "failures": 1,
-        "soft_failures": 0,
-        "polling": false
-      },
-      {
         "family": "ls",
-        "runs": 19,
+        "runs": 21,
         "failures": 1,
         "soft_failures": 0,
         "polling": true
       },
       {
-        "family": "python",
-        "runs": 17,
+        "family": "git log",
+        "runs": 11,
+        "failures": 1,
+        "soft_failures": 0,
+        "polling": false
+      },
+      {
+        "family": "git commit",
+        "runs": 7,
         "failures": 1,
         "soft_failures": 0,
         "polling": false
@@ -99,12 +99,20 @@
     ],
     "failure_streaks": [
       {
+        "session_id": "anon-fd1e580b",
+        "family": "node",
+        "length": 3,
+        "from_call": 409,
+        "to_call": 425,
+        "distinct_errors": 3
+      },
+      {
         "session_id": "anon-4ad678ac",
-        "family": "set-location",
-        "length": 5,
-        "from_call": 125,
-        "to_call": 129,
-        "distinct_errors": 5
+        "family": "docker logs",
+        "length": 2,
+        "from_call": 19,
+        "to_call": 99,
+        "distinct_errors": 2
       },
       {
         "session_id": "anon-98cddc20",
@@ -112,14 +120,6 @@
         "length": 2,
         "from_call": 198,
         "to_call": 199,
-        "distinct_errors": 2
-      },
-      {
-        "session_id": "anon-fd1e580b",
-        "family": "pytest",
-        "length": 2,
-        "from_call": 96,
-        "to_call": 98,
         "distinct_errors": 2
       }
     ]

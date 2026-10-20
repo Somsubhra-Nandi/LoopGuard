@@ -167,7 +167,7 @@ func TestRunFindsLoops(t *testing.T) {
 	}
 
 	rf := byDet[event.DetectorRepeatedFailure+"/"]
-	if rf == nil || rf.Family != "npx jest" || rf.Count != 5 || rf.FirstCall != 1 || rf.LastCall != 9 || rf.FirstSignalCall != 7 {
+	if rf == nil || rf.Family != "jest" || rf.Count != 5 || rf.FirstCall != 1 || rf.LastCall != 9 || rf.FirstSignalCall != 7 {
 		t.Fatalf("repeated failure loop = %+v", rf)
 	}
 	if rf.WastedToolCalls != 9 || rf.DurationSeconds != (8*22) {
@@ -221,7 +221,7 @@ func TestReport(t *testing.T) {
 	if err := r.WriteText(&text); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Loops found          3", "repeated_failure", "`npx jest`", "would have: nudged at call 7", "M4"} {
+	for _, want := range []string{"Loops found          3", "repeated_failure", "`jest`", "would have: nudged at call 7", "M4"} {
 		if !strings.Contains(text.String(), want) {
 			t.Errorf("text report missing %q:\n%s", want, text.String())
 		}

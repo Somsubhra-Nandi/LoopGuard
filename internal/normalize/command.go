@@ -16,7 +16,9 @@ type Command struct {
 	// is the text fingerprinted for bash actions.
 	Canonical string
 	// Commands holds the words of each real command, in order (LLD §4.3:
-	// the first real command of each pipeline, every element of a list).
+	// the first real command of each pipeline, every element of a list),
+	// with the command name canonical (identity.go: python3 -m pytest →
+	// pytest, npx jest → jest).
 	Commands [][]string
 	// Families is the family of each entry in Commands.
 	Families []string
@@ -45,6 +47,8 @@ var skipCommands = map[string]bool{
 	"cd": true, "pushd": true, "popd": true, "export": true, "source": true, ".": true,
 	"set": true, "unset": true, "alias": true, "true": true, ":": true, "local": true,
 	"declare": true, "typeset": true, "readonly": true, "shopt": true, "trap": true,
+	// PowerShell's cd
+	"set-location": true, "push-location": true, "pop-location": true, "sl": true,
 }
 
 // wrapperCommands run the rest of their arguments as the real command.
@@ -95,8 +99,7 @@ func ParseCommand(cmd string) Command {
 
 func fallbackCommand(cmd string) Command {
 	c := Command{Canonical: Text(cmd)}
-	words := strings.Fields(c.Canonical)
-	if len(words) > 0 {
+	for _, words := range fallbackSegments(c.Canonical) {
 		c.add(words, 0)
 	}
 	return c
@@ -187,7 +190,7 @@ func (c *Command) add(words []string, depth int) {
 	if psAssignment(words) {
 		return
 	}
-	words = unwrap(skipAssignments(words))
+	words = canonicalWords(unwrap(skipAssignments(words)))
 	if len(words) == 0 {
 		return
 	}

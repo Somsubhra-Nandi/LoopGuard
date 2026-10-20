@@ -36,7 +36,7 @@ func TestReplayText(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
-	for _, want := range []string{"Scanned 1 sessions (2 streams", "Loops found          3", "Top 3 loops", "`npx jest`", "src/flags.ts"} {
+	for _, want := range []string{"Scanned 1 sessions (2 streams", "Loops found          3", "Top 3 loops", "`jest`", "src/flags.ts"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}

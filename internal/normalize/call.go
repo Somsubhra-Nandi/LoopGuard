@@ -57,6 +57,7 @@ func (b *Builder) Build(ev *event.Event) *event.ToolCall {
 	if cmd != nil {
 		c.Command = cmd.Canonical
 		c.Family = cmd.Primary()
+		c.Identity = Identity(cmd.PrimaryWords(), c.Family, ev.Cwd)
 		c.Polling = b.Poll.Matches(*cmd)
 		readOnly = b.ReadOnly.Matches(*cmd)
 	}

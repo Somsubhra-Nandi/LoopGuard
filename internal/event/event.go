@@ -65,8 +65,12 @@ type Event struct {
 	Model      string // SessionStart only, if the agent reports it
 	Source     string // SessionStart only: startup | resume | clear | compact | ...
 	ReceivedAt time.Time
-	Seq        uint64          // assigned by the session
-	Raw        json.RawMessage // full payload, kept in memory only
+	// RunTime is the tool's own run time when the agent reports it
+	// (PostToolUse duration_ms); 0 if unknown. Unlike the time from the pre
+	// event to the post, it excludes waiting for a permission decision.
+	RunTime time.Duration
+	Seq     uint64          // assigned by the session
+	Raw     json.RawMessage // full payload, kept in memory only
 }
 
 // EditPair holds the hashes of an edit's old and new strings, so inverse
@@ -79,10 +83,13 @@ type EditPair struct {
 // ToolCall is a completed tool call: the post event plus everything the
 // normalizer derived from it.
 type ToolCall struct {
-	Event         *Event          // the post event
-	ActionFP      uint64          // see LLD §4.2
-	Family        string          // e.g. "npm test", "pytest", "go test"; the tool name for non-bash tools
-	Command       string          // bash only: normalized command line, for evidence
+	Event    *Event // the post event
+	ActionFP uint64 // see LLD §4.2
+	Family   string // e.g. "npm test", "pytest", "go test"; the tool name for non-bash tools
+	Command  string // bash only: normalized command line, for evidence
+	// Identity (bash only) is the primary command's family plus its
+	// meaningful arguments (normalize.Identity): what a block matches.
+	Identity      string
 	Polling       bool            // bash only: the primary command is a polling command (exempt from D1/D2)
 	ResultFP      uint64          // hash of normalized output
 	ErrorSig      *ErrorSignature // nil if success
@@ -112,6 +119,10 @@ type ErrorSignature struct {
 	Sim   uint64   // 64-bit simhash of the error-bearing lines
 	Loc   uint64   // xxhash of the sorted source files the error lines point at (0 if none)
 	Lines []string // up to 5 key lines, for evidence and nudge text
+	// Best holds up to 3 lines that say what went wrong (assertion
+	// payloads and error messages before test names; never FAIL or
+	// summary lines), in output order. Nudges show these.
+	Best []string
 }
 
 // Detector names, shared by detectors (which emit them) and the policy
@@ -123,6 +134,9 @@ const (
 	DetectorReadThrash      = "read_thrash"
 	DetectorStall           = "stall"
 	DetectorBudget          = "budget"
+	// DetectorSelfProtection is not a loop detector: it marks the denies of
+	// agent actions that would turn LoopGuard off (internal/guard).
+	DetectorSelfProtection = "self_protection"
 )
 
 // Signal is a detector's claim that a loop is happening.

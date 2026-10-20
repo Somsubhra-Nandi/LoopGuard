@@ -18,7 +18,7 @@ func TestFamily(t *testing.T) {
 	}{
 		{"npm test", []string{"npm test"}},
 		{"npm  test", []string{"npm test"}},
-		{"npx jest src/a.test.ts", []string{"npx jest"}},
+		{"npx jest src/a.test.ts", []string{"jest"}}, // identity.go rule 4
 		{"pytest tests/test_calc.py -x", []string{"pytest"}},
 		{"pytest -k test_add", []string{"pytest"}},
 		{"python -m pytest -q", []string{"pytest"}},
@@ -222,7 +222,7 @@ func TestBuild(t *testing.T) {
 		Input:  json.RawMessage(`{"command":"cd web && npx jest"}`),
 		Output: json.RawMessage(`{"stdout":"Tests: 2 failed, 4 passed, 6 total","stderr":""}`),
 	})
-	if c.Family != "npx jest" || !c.Failed() || c.FailingTests != 2 || c.Polling {
+	if c.Family != "jest" || c.Identity != "jest" || !c.Failed() || c.FailingTests != 2 || c.Polling {
 		t.Errorf("bash failure: %+v", c)
 	}
 

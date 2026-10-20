@@ -59,8 +59,8 @@ func TestNearMissRepeatedFailureBelowThreshold(t *testing.T) {
 		t.Fatalf("near misses = %+v", res.NearMisses)
 	}
 	n := ns[0]
-	if n.Count != 3 || n.Threshold != 4 || n.FromCall != 1 || n.ToCall != 5 || n.Family != "npx jest" ||
-		!strings.Contains(n.Reason, "3 same-error failures of `npx jest`, threshold is 4") || !strings.Contains(n.Reason, "success") {
+	if n.Count != 3 || n.Threshold != 4 || n.FromCall != 1 || n.ToCall != 5 || n.Family != "jest" ||
+		!strings.Contains(n.Reason, "3 same-error failures of `jest`, threshold is 4") || !strings.Contains(n.Reason, "success") {
 		t.Errorf("near miss = %+v", n)
 	}
 	if n.Closeness != 0.75 {
@@ -170,10 +170,10 @@ func TestSoftFailures(t *testing.T) {
 
 func TestFailureShapeAndReportSections(t *testing.T) {
 	res := runSynthetic(t)
-	if len(res.Families) == 0 || res.Families[0].Family != "npx jest" || res.Families[0].Failures != 5 || res.Families[0].Runs != 5 {
+	if len(res.Families) == 0 || res.Families[0].Family != "jest" || res.Families[0].Failures != 5 || res.Families[0].Runs != 5 {
 		t.Errorf("families = %+v", res.Families)
 	}
-	if len(res.Streaks) != 2 || res.Streaks[0].Length != 5 || res.Streaks[0].Family != "npx jest" ||
+	if len(res.Streaks) != 2 || res.Streaks[0].Length != 5 || res.Streaks[0].Family != "jest" ||
 		res.Streaks[0].FromCall != 1 || res.Streaks[0].ToCall != 9 || res.Streaks[0].Errors != 1 {
 		t.Errorf("streaks = %+v", res.Streaks)
 	}
@@ -183,7 +183,7 @@ func TestFailureShapeAndReportSections(t *testing.T) {
 	if err := plain.WriteText(&text); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Failures by command family", "npx jest", "Longest same-family failure streak per session", "5× `npx jest`, calls 1-9, 1 distinct errors"} {
+	for _, want := range []string{"Failures by command family", "jest", "Longest same-family failure streak per session", "5× `jest`, calls 1-9, 1 distinct errors"} {
 		if !strings.Contains(text.String(), want) {
 			t.Errorf("report missing %q:\n%s", want, text.String())
 		}
