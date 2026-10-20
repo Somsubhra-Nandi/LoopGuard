@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Somsubhra-Nandi/loopguard/internal/capture"
 	"github.com/Somsubhra-Nandi/loopguard/internal/daemon"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
 	"github.com/Somsubhra-Nandi/loopguard/internal/proc"
@@ -38,8 +39,9 @@ It listens on 127.0.0.1 (port 47821 or the first free one above it) and keeps
 its files in ~/.loopguard (%USERPROFILE%\.loopguard on Windows; override with
 LOOPGUARD_HOME): daemon.json, token, loopguard.db, logs\daemon.log.
 
-LOOPGUARD_CAPTURE=1 saves redacted hook payloads to <home>/capture/ for
-golden tests (at most 20 per event type).`,
+Capture mode saves redacted hook payloads to <home>/capture/ for golden
+tests (at most 20 per event type). Turn it on and off with 'loopguard
+capture on|off' (no restart needed), or force it on with LOOPGUARD_CAPTURE=1.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			dir, err := home.Dir()
@@ -55,7 +57,7 @@ golden tests (at most 20 per event type).`,
 				Home:    dir,
 				Version: version,
 				Port:    port,
-				Capture: os.Getenv(daemon.EnvCapture) == "1",
+				Capture: os.Getenv(capture.EnvCapture) == "1",
 				Log:     slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil)),
 			})
 			var already *daemon.AlreadyRunningError

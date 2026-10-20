@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter"
+	"github.com/Somsubhra-Nandi/loopguard/internal/capture"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
 
@@ -38,17 +39,19 @@ type EventReply struct {
 }
 
 type server struct {
-	token    string
-	homeID   string
-	version  string
-	adapters adapter.Registry
-	mgr      *Manager
-	st       *store.Store
-	w        *store.Writer
-	met      *metrics
-	log      *slog.Logger
-	capture  *capturer
-	shutdown func()
+	token     string
+	homeID    string
+	version   string
+	adapters  adapter.Registry
+	mgr       *Manager
+	st        *store.Store
+	w         *store.Writer
+	met       *metrics
+	log       *slog.Logger
+	capture   *capture.Capturer
+	captureOn *capture.Switch
+	started   time.Time
+	shutdown  func()
 }
 
 func (d *server) storeMode() string {
@@ -89,6 +92,7 @@ func (d *server) routes() http.Handler {
 	mux.Handle("POST /v1/events", d.auth(d.events))
 	mux.Handle("GET /v1/sessions", d.auth(d.sessions))
 	mux.Handle("GET /v1/sessions/{id}", d.auth(d.sessionDetail))
+	mux.Handle("GET /v1/decisions", d.auth(d.decisions))
 	mux.Handle("GET /metrics", d.auth(d.metrics))
 	mux.Handle("POST /v1/shutdown", d.auth(d.shutdownHandler))
 	return d.hostCheck(mux)
@@ -134,7 +138,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func (d *server) healthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, Health{OK: true, Service: "loopguard", Version: d.version, PID: os.Getpid(),
-		HomeID: d.homeID, Store: d.storeMode()})
+		HomeID: d.homeID, Store: d.storeMode(), Capture: d.captureOn.Enabled(), Started: d.started})
 }
 
 // events ingests one hook payload and replies with the rendered decision.
@@ -164,9 +168,9 @@ func (d *server) events(w http.ResponseWriter, r *http.Request) {
 		none("read")
 		return
 	}
-	if d.capture != nil {
+	if d.captureOn.Enabled() {
 		go func() {
-			if err := d.capture.save(agent, body); err != nil {
+			if err := d.capture.Save(agent, body); err != nil {
 				d.log.Warn("capture failed", "err", err)
 			}
 		}()
@@ -349,4 +353,38 @@ func (d *server) shutdownHandler(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	d.log.Info("shutdown requested")
 	go d.shutdown()
+}
+
+// decisions returns the newest would-have decisions of all sessions,
+// newest first (?limit=, default 10, at most 200).
+func (d *server) decisions(w http.ResponseWriter, r *http.Request) {
+	limit := 10
+	if s := r.URL.Query().Get("limit"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n <= 0 {
+			http.Error(w, "bad limit", http.StatusBadRequest)
+			return
+		}
+		limit = min(n, 200)
+	}
+	var out []store.Intervention
+	if d.st != nil {
+		d.w.Flush()
+		rows, err := d.st.RecentInterventions(r.Context(), limit)
+		if err != nil {
+			d.log.Warn("listing decisions", "err", err)
+			http.Error(w, "store error", http.StatusInternalServerError)
+			return
+		}
+		out = rows
+	} else {
+		for _, s := range d.mgr.Live() {
+			out = append(out, s.WouldHave...)
+		}
+		sort.SliceStable(out, func(i, j int) bool { return out[i].TS.After(out[j].TS) })
+		if len(out) > limit {
+			out = out[:limit]
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"decisions": nonNil(out), "store": d.storeMode()})
 }

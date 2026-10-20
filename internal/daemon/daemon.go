@@ -19,6 +19,7 @@ import (
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter"
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter/claudecode"
+	"github.com/Somsubhra-Nandi/loopguard/internal/capture"
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
 	"github.com/Somsubhra-Nandi/loopguard/internal/pipeline"
@@ -36,8 +37,10 @@ const (
 type Options struct {
 	Home    string // data directory (required)
 	Version string
-	Port    int  // first port to try (0: DefaultPort; -1: any free port, for tests)
-	Capture bool // save raw payloads for golden tests (LOOPGUARD_CAPTURE=1)
+	Port    int // first port to try (0: DefaultPort; -1: any free port, for tests)
+	// Capture forces payload capture on for the whole run (LOOPGUARD_CAPTURE=1);
+	// otherwise it follows the flag file (`loopguard capture on`).
+	Capture bool
 	// Log receives the daemon's structured logs; nil logs to
 	// <home>/logs/daemon.log only.
 	Log         *slog.Logger
@@ -116,11 +119,11 @@ func Run(ctx context.Context, o Options) error {
 		w:        w,
 		met:      met,
 		log:      log,
+		started:  time.Now().UTC(),
 	}
-	if o.Capture {
-		uh, _ := os.UserHomeDir()
-		d.capture = newCapturer(filepath.Join(o.Home, home.CaptureDir), uh)
-	}
+	uh, _ := os.UserHomeDir()
+	d.capture = capture.New(capture.Dir(o.Home), uh)
+	d.captureOn = capture.NewSwitch(o.Home, o.Capture)
 
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
@@ -142,7 +145,7 @@ func Run(ctx context.Context, o Options) error {
 		return fmt.Errorf("writing %s: %w", home.DaemonFile, err)
 	}
 	log.Info("daemon started", "pid", info.PID, "port", info.Port, "version", o.Version,
-		"store", d.storeMode(), "capture", o.Capture)
+		"store", d.storeMode(), "capture", d.captureOn.Enabled())
 	if o.Ready != nil {
 		o.Ready(info)
 	}
@@ -214,12 +217,14 @@ func listen(first int, id string) (net.Listener, error) {
 
 // Health is the /healthz response.
 type Health struct {
-	OK      bool   `json:"ok"`
-	Service string `json:"service"`
-	Version string `json:"version"`
-	PID     int    `json:"pid"`
-	HomeID  string `json:"home_id"`
-	Store   string `json:"store"` // "sqlite" | "memory-only"
+	OK      bool      `json:"ok"`
+	Service string    `json:"service"`
+	Version string    `json:"version"`
+	PID     int       `json:"pid"`
+	HomeID  string    `json:"home_id"`
+	Store   string    `json:"store"`   // "sqlite" | "memory-only"
+	Capture bool      `json:"capture"` // payload capture is on
+	Started time.Time `json:"started_at"`
 }
 
 // healthInfo fetches /healthz from a local port.

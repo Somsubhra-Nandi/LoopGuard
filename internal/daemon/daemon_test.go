@@ -16,7 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Somsubhra-Nandi/loopguard/internal/capture"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
+	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
 
 type testDaemon struct {
@@ -191,6 +193,23 @@ func TestDaemonObserveModeEndToEnd(t *testing.T) {
 	}
 	if len(detail.Interventions) == 0 || detail.Interventions[0].Action != "nudge" || detail.Interventions[0].Mode != "observe" {
 		t.Errorf("interventions = %+v (want an observe-mode would-have nudge)", detail.Interventions)
+	}
+	if s.Failures != 6 {
+		t.Errorf("session failures = %d, want 6", s.Failures)
+	}
+	code, b = d.do("GET", "/v1/decisions?limit=3", nil, nil)
+	var decs struct {
+		Decisions []store.Intervention `json:"decisions"`
+	}
+	if err := json.Unmarshal(b, &decs); code != 200 || err != nil || len(decs.Decisions) == 0 {
+		t.Fatalf("GET /v1/decisions: %d %s", code, b)
+	}
+	if dd := decs.Decisions[0]; dd.Action != "nudge" || dd.Detector != "repeated_failure" || dd.Reason == "" ||
+		dd.TS.IsZero() || dd.SessionKey != "claude-code:s1" {
+		t.Errorf("decision = %+v", dd)
+	}
+	if code, _ := d.do("GET", "/v1/decisions?limit=x", nil, nil); code != 400 {
+		t.Errorf("bad limit: %d, want 400", code)
 	}
 	if code, _ := d.do("GET", "/v1/sessions/nope", nil, nil); code != 404 {
 		t.Errorf("unknown session: %d, want 404", code)
@@ -373,7 +392,7 @@ func TestDaemonCapture(t *testing.T) {
 	cwd := filepath.Join(userHome, "src", "proj")
 	cwdJSON, _ := json.Marshal(cwd)
 	secret := "sk-ant-api03-" + strings.Repeat("A", 40)
-	for i := 0; i < maxCapturePerEvent+5; i++ {
+	for i := 0; i < capture.MaxPerEvent+5; i++ {
 		d.event(fmt.Sprintf(`{"session_id":"c","hook_event_name":"PreToolUse","cwd":%s,"tool_name":"Bash","tool_input":{"command":"curl -H 'x-api-key: %s' x"}}`, cwdJSON, secret))
 	}
 	d.event(`not json`)
@@ -382,15 +401,15 @@ func TestDaemonCapture(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		files, _ = filepath.Glob(filepath.Join(capDir, "PreToolUse-*.json"))
-		if len(files) == maxCapturePerEvent {
+		if len(files) == capture.MaxPerEvent {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	time.Sleep(100 * time.Millisecond) // any extra (wrong) writes land now
 	files, _ = filepath.Glob(filepath.Join(capDir, "*"))
-	if len(files) != maxCapturePerEvent {
-		t.Fatalf("captured %d files, want %d: %v", len(files), maxCapturePerEvent, files)
+	if len(files) != capture.MaxPerEvent {
+		t.Fatalf("captured %d files, want %d: %v", len(files), capture.MaxPerEvent, files)
 	}
 	b, err := os.ReadFile(filepath.Join(capDir, "PreToolUse-1.json"))
 	if err != nil {
@@ -400,7 +419,7 @@ func TestDaemonCapture(t *testing.T) {
 	if strings.Contains(s, secret) || !strings.Contains(s, "<REDACTED:") {
 		t.Errorf("secret not redacted:\n%s", s)
 	}
-	if strings.Contains(strings.ToLower(s), strings.ToLower(filepath.Base(userHome))) || !strings.Contains(s, homePlaceholder) {
+	if strings.Contains(strings.ToLower(s), strings.ToLower(filepath.Base(userHome))) || !strings.Contains(s, capture.HomePlaceholder) {
 		t.Errorf("home directory not replaced:\n%s", s)
 	}
 	var v map[string]any
@@ -448,5 +467,53 @@ func TestLogRotation(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".3"); err == nil {
 		t.Error("more backups than logBackups")
+	}
+}
+
+// TestCaptureFlagNeedsNoRestart turns capture on and off with the flag
+// file while the daemon runs.
+func TestCaptureFlagNeedsNoRestart(t *testing.T) {
+	dir := tempHome(t)
+	d := startDaemon(t, dir, nil)
+	capDir := filepath.Join(dir, home.CaptureDir, "claude-code")
+	count := func() int {
+		files, _ := filepath.Glob(filepath.Join(capDir, "*.json"))
+		return len(files)
+	}
+	healthCapture := func() bool {
+		h, ok := Healthy(d.info.Port, dir)
+		if !ok {
+			t.Fatal("daemon not healthy")
+		}
+		return h.Capture
+	}
+	stop := `{"session_id":"f","hook_event_name":"Stop"}`
+	d.event(stop)
+	time.Sleep(100 * time.Millisecond)
+	if count() != 0 || healthCapture() {
+		t.Fatal("captured with capture off")
+	}
+
+	if err := capture.SetFlag(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(capture.SwitchTTL + 3*time.Second)
+	for count() == 0 && time.Now().Before(deadline) {
+		d.event(stop)
+		time.Sleep(50 * time.Millisecond)
+	}
+	if count() == 0 || !healthCapture() {
+		t.Fatal("flag file did not turn capture on")
+	}
+
+	if err := capture.SetFlag(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(capture.SwitchTTL + 100*time.Millisecond)
+	before := count()
+	d.event(stop)
+	time.Sleep(100 * time.Millisecond)
+	if count() != before || healthCapture() {
+		t.Error("still capturing after the flag file was removed")
 	}
 }

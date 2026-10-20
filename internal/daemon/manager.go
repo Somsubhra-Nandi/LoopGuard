@@ -396,6 +396,9 @@ func (a *actor) record(ev *event.Event, res pipeline.Result) {
 
 	if c := res.Call; c != nil {
 		s.ToolCalls++
+		if c.Failed() {
+			s.Failures++
+		}
 		a.m.w.Enqueue(callRow(a.key, c))
 	}
 	for _, sig := range res.Signals {
@@ -416,8 +419,8 @@ func (a *actor) record(ev *event.Event, res pipeline.Result) {
 		if msg == "" {
 			msg = d.Reason
 		}
-		row := store.Intervention{SessionKey: a.key, Seq: d.Seq, LoopKey: d.LoopKey, Action: string(d.WouldHave),
-			Mode: store.ModeObserve, Message: redact.String(msg)}
+		row := store.Intervention{SessionKey: a.key, Seq: d.Seq, TS: ev.ReceivedAt, LoopKey: d.LoopKey, Detector: d.Detector,
+			Action: string(d.WouldHave), Mode: store.ModeObserve, Reason: redact.String(d.Reason), Message: redact.String(msg)}
 		s.WouldHave = appendRecent(s.WouldHave, row)
 		a.m.w.Enqueue(row)
 	}
