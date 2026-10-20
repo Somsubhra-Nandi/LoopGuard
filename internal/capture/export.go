@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/Somsubhra-Nandi/loopguard/internal/anon"
 	"github.com/Somsubhra-Nandi/loopguard/internal/redact"
 )
 
@@ -64,8 +64,8 @@ func Export(src, out string, o ExportOptions) (ExportStats, error) {
 		v    any
 	}
 	var payloads []payload
-	x := &anonymizer{homes: HomeForms(o.UserHome), words: map[string]string{}}
-	x.learnUser(filepath.Base(o.UserHome))
+	x := &anonymizer{home: anon.NewHomeReplacer(o.UserHome), words: map[string]string{}}
+	x.learnUser(anon.Base(o.UserHome))
 	for _, u := range o.Usernames {
 		x.learnUser(u)
 	}
@@ -115,13 +115,12 @@ func Export(src, out string, o ExportOptions) (ExportStats, error) {
 }
 
 type anonymizer struct {
-	homes []string
+	home  *anon.HomeReplacer
 	words map[string]string // name → placeholder
+	short []*regexp.Regexp  // 8.3 short names of the learned usernames (JANEDO~1)
 }
 
 var (
-	// homeDirRe finds the username in a home directory path.
-	homeDirRe = regexp.MustCompile(`(?i)(?:^|[/\\])(?:Users|home)[/\\]+([^/\\"<>]+)`)
 	nameSplit = regexp.MustCompile(`[\s._-]+`)
 	emailRe   = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
 )
@@ -139,6 +138,9 @@ func (x *anonymizer) learnUser(name string) {
 		return
 	}
 	x.words[name] = userPlaceholder
+	if stem := anon.ShortName(name); stem != "" {
+		x.short = append(x.short, regexp.MustCompile(`(?i)`+regexp.QuoteMeta(stem)+`~[0-9]+`))
+	}
 	for _, part := range nameSplit.Split(name, -1) {
 		if len(part) >= 3 {
 			x.words[part] = userPlaceholder
@@ -150,8 +152,8 @@ func (x *anonymizer) learnUser(name string) {
 // in any home directory path, and the last element of cwd (the project).
 func (x *anonymizer) learnPaths(v any) {
 	walkStrings(v, func(s string) string {
-		for _, m := range homeDirRe.FindAllStringSubmatch(s, -1) {
-			x.learnUser(m[1])
+		for _, u := range anon.HomeUsers(s) {
+			x.learnUser(u)
 		}
 		return s
 	})
@@ -160,7 +162,7 @@ func (x *anonymizer) learnPaths(v any) {
 		return
 	}
 	if cwd, ok := m["cwd"].(string); ok {
-		base := path.Base(strings.TrimRight(strings.ReplaceAll(cwd, `\`, "/"), "/"))
+		base := anon.Base(cwd)
 		if len(base) >= 3 && !genericNames[strings.ToLower(base)] && !strings.ContainsAny(base, "<>:") {
 			if _, isUser := x.words[base]; !isUser {
 				x.words[base] = projectPlaceholder
@@ -171,8 +173,9 @@ func (x *anonymizer) learnPaths(v any) {
 
 func (x *anonymizer) clean(s string) string {
 	s = redact.String(s)
-	for _, h := range x.homes {
-		s = replaceFold(s, h, HomePlaceholder)
+	s = x.home.Replace(s, HomePlaceholder)
+	for _, re := range x.short {
+		s = re.ReplaceAllString(s, userPlaceholder)
 	}
 	s = emailRe.ReplaceAllString(s, "<email>")
 	words := make([]string, 0, len(x.words))
@@ -186,37 +189,7 @@ func (x *anonymizer) clean(s string) string {
 		return words[i] < words[j]
 	})
 	for _, w := range words {
-		s = replaceWord(s, w, x.words[w])
+		s = anon.ReplaceWord(s, w, x.words[w])
 	}
 	return s
-}
-
-// replaceWord replaces case-insensitive occurrences of w that are not part
-// of a longer word (letters and digits on either side).
-func replaceWord(s, w, repl string) string {
-	lower, lw := strings.ToLower(s), strings.ToLower(w)
-	if len(lower) != len(s) || !strings.Contains(lower, lw) {
-		return s
-	}
-	var b strings.Builder
-	for i := 0; ; {
-		j := strings.Index(lower[i:], lw)
-		if j < 0 {
-			b.WriteString(s[i:])
-			return b.String()
-		}
-		j += i
-		end := j + len(w)
-		if (j == 0 || !isAlnum(s[j-1])) && (end == len(s) || !isAlnum(s[end])) {
-			b.WriteString(s[i:j])
-			b.WriteString(repl)
-		} else {
-			b.WriteString(s[i:end])
-		}
-		i = end
-	}
-}
-
-func isAlnum(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }

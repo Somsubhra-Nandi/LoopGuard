@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Somsubhra-Nandi/loopguard/internal/anon"
 	"time"
 )
 
@@ -43,79 +45,114 @@ func TestSwitchCachesTheFlag(t *testing.T) {
 	}
 }
 
+// TestExportAnonymizes runs the same capture-and-export on Windows-, macOS-,
+// and Linux-style payloads, on every OS: the paths come from the data, so
+// where the test runs must not matter.
 func TestExportAnonymizes(t *testing.T) {
-	userHome := `C:\Users\Jane Q-Doe` // the same string on every OS
-	c := New(t.TempDir(), userHome)
-	cwd := userHome + `\desktop\secret-proj`
-	payloads := []map[string]any{
-		{"hook_event_name": "PreToolUse", "session_id": "s", "cwd": cwd, "tool_name": "Bash",
-			"tool_input": map[string]any{"command": "cd secret-proj && git log --author jane.doe@example.com",
-				"description": "ask Jane about secret-proj; keep secret-project-x"}},
-		// A path below another user's home: that username is learned too.
-		{"hook_event_name": "Stop", "session_id": "s", "cwd": cwd, "transcript_path": `/home/bobby/.claude/projects/x.jsonl`,
-			"note": "bobby and Jane-Doe and JANE", "key": "sk-ant-api03-" + strings.Repeat("B", 40)},
+	styles := []struct {
+		name, home, cwd string
+		otherSpellings  []string // the home and cwd as they also appear in payloads
+		otherUserPath   string   // a path below another user's home
+		leaks           []string // must not appear in the export
+		want            []string // must appear
+	}{
+		{
+			name: "windows", home: `C:\Users\Jane Q-Doe`, cwd: `C:\Users\Jane Q-Doe\desktop\secret-proj`,
+			otherSpellings: []string{"/c/Users/Jane Q-Doe/desktop/secret-proj", "C:/Users/Jane Q-Doe/.npmrc",
+				`C:\Users\JANEQ-~1\AppData\Local\Temp\out.log`, `C:\Users\Jane Q-Doe\.claude\projects\C--Users-Jane-Q-Doe-desktop-secret-proj\s.jsonl`},
+			otherUserPath: `D:\Users\bobby\notes.txt`,
+			leaks:         []string{"Jane", "Doe", "JANEQ", "bobby", "example.com"},
+			want:          []string{`<HOME>\desktop\project`, "<HOME>/desktop/project", `<HOME>\AppData`, "cd project &&", "<email>", "secret-project-x"},
+		},
+		{
+			name: "macos", home: "/Users/janeqdoe", cwd: "/Users/janeqdoe/code/secret-proj",
+			otherSpellings: []string{"/Users/janeqdoe/.npmrc", "/Users/janeqdoe/.claude/projects/-Users-janeqdoe-code-secret-proj/s.jsonl"},
+			otherUserPath:  "/Users/bobby/notes.txt",
+			leaks:          []string{"janeqdoe", "bobby", "example.com"},
+			want:           []string{"<HOME>/code/project", "<HOME>/.npmrc", "cd project &&", "<email>", "secret-project-x"},
+		},
+		{
+			name: "linux", home: "/home/janeqdoe", cwd: "/home/janeqdoe/src/secret-proj",
+			otherSpellings: []string{`\home\janeqdoe\src\secret-proj`, "/home/janeqdoe/.claude/projects/-home-janeqdoe-src-secret-proj/s.jsonl"},
+			otherUserPath:  "/home/bobby/notes.txt",
+			leaks:          []string{"janeqdoe", "bobby", "example.com"},
+			want:           []string{"<HOME>/src/project", `<HOME>\src\project`, "cd project &&", "<email>", "secret-project-x"},
+		},
 	}
-	for _, p := range payloads {
-		b, _ := json.Marshal(p)
-		if err := c.Save("claude-code", b); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := c.Save("claude-code", []byte("not json")); err != nil {
-		t.Fatal(err)
-	}
-	out := filepath.Join(t.TempDir(), "testdata", "2.1.0")
-	st, err := Export(filepath.Join(c.dir, "claude-code"), out, ExportOptions{UserHome: userHome,
-		Golden: func(b []byte) ([]byte, error) { return []byte("golden for " + string(b[:1]) + "\n"), nil }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(st.Files) != 2 || st.Goldens != 2 {
-		t.Fatalf("stats: %+v", st)
-	}
-	var all strings.Builder
-	for _, f := range st.Files {
-		b, err := os.ReadFile(filepath.Join(out, f))
-		if err != nil {
-			t.Fatal(err)
-		}
-		var v map[string]any
-		if err := json.Unmarshal(b, &v); err != nil {
-			t.Fatalf("%s is not JSON: %v", f, err)
-		}
-		all.Write(b)
-		if _, err := os.Stat(filepath.Join(out, strings.TrimSuffix(f, ".json")+".golden")); err != nil {
-			t.Errorf("no golden for %s", f)
-		}
-	}
-	s := all.String()
-	for _, leak := range []string{"Jane", "Doe", "jane", "bobby", "secret-proj\"", "secret-proj ", "example.com", "BBBBBBBBBB"} {
-		if strings.Contains(s, leak) {
-			t.Errorf("export contains %q:\n%s", leak, s)
-		}
-	}
-	for _, want := range []string{`<HOME>\\desktop\\project`, "cd project &&", "<email>", "secret-project-x", "<REDACTED:", "user and user"} {
-		if !strings.Contains(s, want) {
-			t.Errorf("export lacks %q:\n%s", want, s)
-		}
-	}
-	if st.Replaced["secret-proj"] != "project" || st.Replaced["bobby"] != "user" {
-		t.Errorf("replaced: %v", st.Replaced)
+	for _, st := range styles {
+		t.Run(st.name, func(t *testing.T) {
+			c := New(t.TempDir(), st.home)
+			user := anonBase(st.home)
+			payloads := []map[string]any{
+				{"hook_event_name": "PreToolUse", "session_id": "s", "cwd": st.cwd, "tool_name": "Bash",
+					"tool_input": map[string]any{"command": "cd secret-proj && git log --author jane.doe@example.com",
+						"description": "ask " + user + " about secret-proj; keep secret-project-x"}},
+				{"hook_event_name": "Stop", "session_id": "s", "cwd": st.cwd, "paths": st.otherSpellings,
+					"note": st.otherUserPath + " belongs to bobby", "key": "sk-ant-api03-" + strings.Repeat("B", 40)},
+			}
+			for _, p := range payloads {
+				b, _ := json.Marshal(p)
+				if err := c.Save("claude-code", b); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := c.Save("claude-code", []byte("not json")); err != nil {
+				t.Fatal(err)
+			}
+			out := filepath.Join(t.TempDir(), "testdata", "2.1.0")
+			res, err := Export(filepath.Join(c.dir, "claude-code"), out, ExportOptions{UserHome: st.home,
+				Golden: func(b []byte) ([]byte, error) { return []byte("golden\n"), nil }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res.Files) != 2 || res.Goldens != 2 {
+				t.Fatalf("stats: %+v", res)
+			}
+			var all strings.Builder
+			for _, f := range res.Files {
+				b, err := os.ReadFile(filepath.Join(out, f))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var v map[string]any
+				if err := json.Unmarshal(b, &v); err != nil {
+					t.Fatalf("%s is not JSON: %v", f, err)
+				}
+				// Check the decoded strings, keys included, not the JSON text.
+				walkStrings(v, func(s string) string { all.WriteString(s + "\n"); return s })
+				if _, err := os.Stat(filepath.Join(out, strings.TrimSuffix(f, ".json")+".golden")); err != nil {
+					t.Errorf("no golden for %s", f)
+				}
+			}
+			s := all.String()
+			for _, leak := range append(st.leaks, "BBBBBBBBBB") {
+				if strings.Contains(s, leak) {
+					t.Errorf("export contains %q:\n%s", leak, s)
+				}
+			}
+			if anon.ReplaceWord(s, "secret-proj", "") != s {
+				t.Errorf("export contains the project name as a word:\n%s", s)
+			}
+			for _, want := range append(st.want, "<REDACTED:", "<HOME>", "belongs to user") {
+				if !strings.Contains(s, want) {
+					t.Errorf("export lacks %q:\n%s", want, s)
+				}
+			}
+			if res.Replaced["secret-proj"] != "project" || res.Replaced["bobby"] != "user" {
+				t.Errorf("replaced: %v", res.Replaced)
+			}
+		})
 	}
 
-	if _, err := Export(t.TempDir(), out, ExportOptions{}); err == nil {
+	if _, err := Export(t.TempDir(), t.TempDir(), ExportOptions{}); err == nil {
 		t.Error("exporting an empty capture directory succeeded")
 	}
 }
 
-func TestReplaceWord(t *testing.T) {
-	for _, tt := range [][3]string{
-		{"loopguard and loopguard-hook", "loopguard", "project and project-hook"},
-		{"LoopGuardX loopguard2 xloopguard", "loopguard", "LoopGuardX loopguard2 xloopguard"},
-		{"/a/LOOPGUARD/b", "loopguard", "/a/project/b"},
-	} {
-		if got := replaceWord(tt[0], tt[1], "project"); got != tt[2] {
-			t.Errorf("replaceWord(%q, %q) = %q, want %q", tt[0], tt[1], got, tt[2])
-		}
+// anonBase is the username of a home directory, either style.
+func anonBase(home string) string {
+	if i := strings.LastIndexAny(home, `/\`); i >= 0 {
+		return home[i+1:]
 	}
+	return home
 }

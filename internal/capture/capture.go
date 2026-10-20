@@ -13,10 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
-	"strings"
 	"sync"
 
+	"github.com/Somsubhra-Nandi/loopguard/internal/anon"
 	"github.com/Somsubhra-Nandi/loopguard/internal/redact"
 )
 
@@ -34,38 +33,18 @@ const HomePlaceholder = "<HOME>"
 // string (keys too). Payloads that aren't JSON are skipped. It is safe for
 // concurrent use.
 type Capturer struct {
-	dir   string
-	homes []string // forms of the user's home directory to replace, longest first
-	mu    sync.Mutex
-	n     map[string]int // agent/event → payloads saved so far (including earlier runs)
+	dir  string
+	home *anon.HomeReplacer // the user's home directory, in every spelling
+	mu   sync.Mutex
+	n    map[string]int // agent/event → payloads saved so far (including earlier runs)
 }
 
 // New returns a capturer writing below dir.
 func New(dir, userHome string) *Capturer {
-	return &Capturer{dir: dir, homes: HomeForms(userHome), n: map[string]int{}}
+	return &Capturer{dir: dir, home: anon.NewHomeReplacer(userHome), n: map[string]int{}}
 }
 
 var nonWord = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
-
-// HomeForms returns the spellings of the home directory that appear in
-// payloads: as is, with the other slash, and as Claude Code encodes it in
-// project directory names (every non-alphanumeric character → '-').
-func HomeForms(h string) []string {
-	if h == "" {
-		return nil
-	}
-	forms := []string{h, strings.ReplaceAll(h, `\`, "/"), strings.ReplaceAll(h, "/", `\`),
-		regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(h, "-")}
-	seen := map[string]bool{}
-	out := forms[:0]
-	for _, f := range forms {
-		if len(f) > 1 && !seen[f] {
-			seen[f] = true
-			out = append(out, f)
-		}
-	}
-	return out
-}
 
 // Save captures one payload. It never fails the event: errors are
 // returned for logging only.
@@ -145,32 +124,5 @@ func walkStrings(v any, f func(string) string) any {
 
 func (c *Capturer) cleanString(s string) string {
 	s = redact.String(s)
-	for _, h := range c.homes {
-		s = replaceFold(s, h, HomePlaceholder)
-	}
-	return s
-}
-
-// replaceFold replaces old in s, ignoring case on Windows, where paths
-// are case-insensitive.
-func replaceFold(s, old, repl string) string {
-	if runtime.GOOS != "windows" {
-		return strings.ReplaceAll(s, old, repl)
-	}
-	lower, lowerOld := strings.ToLower(s), strings.ToLower(old)
-	if len(lower) != len(s) || len(lowerOld) != len(old) {
-		// Lower-casing changed byte lengths (rare non-ASCII); be exact.
-		return strings.ReplaceAll(s, old, repl)
-	}
-	var b strings.Builder
-	for {
-		i := strings.Index(lower, lowerOld)
-		if i < 0 {
-			b.WriteString(s)
-			return b.String()
-		}
-		b.WriteString(s[:i])
-		b.WriteString(repl)
-		s, lower = s[i+len(old):], lower[i+len(old):]
-	}
+	return c.home.Replace(s, HomePlaceholder)
 }
