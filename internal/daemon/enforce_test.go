@@ -167,7 +167,8 @@ func TestEnforceNudgeDenyHalt(t *testing.T) {
 	s.edit("src/cart.ts")
 	_, post := s.bash("npm test", npmFailure)
 	if replyKind(t, post) != "nudge" || !strings.Contains(post.Stdout, `"hookEventName":"PostToolUseFailure"`) ||
-		!strings.Contains(post.Stdout, "has failed 4 times") || !strings.Contains(post.Stdout, `FAIL src/cart.test.ts\n`) ||
+		!strings.Contains(post.Stdout, "has failed 4 times") || !strings.Contains(post.Stdout, `Expected: 110\n  Received: 100\n`) ||
+		strings.Contains(post.Stdout, "FAIL src/cart.test.ts") ||
 		!strings.Contains(post.Stdout, "these files were edited: src/cart.ts.") {
 		t.Fatalf("4th failure: %s", post.Stdout)
 	}

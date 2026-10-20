@@ -38,8 +38,9 @@ const scenarioSession = "e2e0c0de-0000-4000-8000-000000000001"
 // step is one line of the scenario file.
 type step struct {
 	Note string `json:"note"`
-	// Enforce is the reply expected in enforce mode: none, nudge, deny, or
-	// halt. In observe mode every reply is empty.
+	// Enforce is the reply expected in enforce mode: none, nudge, deny,
+	// halt, or note (the context on the first human prompt after a halt).
+	// In observe mode every reply is empty.
 	Enforce string          `json:"enforce"`
 	Payload json.RawMessage `json:"payload"`
 }
@@ -133,7 +134,7 @@ func buildScenario() []step {
 		"last_assistant_message": "Stopped.", "background_tasks": []any{}, "session_crons": []any{}})
 
 	promptID = "11111111-0000-4000-8000-000000000002"
-	add("the human reads the reason and replies", "none", map[string]any{"hook_event_name": "UserPromptSubmit",
+	add("the human reads the reason and replies", "note", map[string]any{"hook_event_name": "UserPromptSubmit",
 		"prompt": "Stop editing cart.ts. Check where the tax rate comes from (config/tax.json)."})
 	npmTest(11, "none", "none")
 	return steps
@@ -237,7 +238,8 @@ func TestInterventionsThroughTheHookBinary(t *testing.T) {
 				}
 				switch got {
 				case "nudge":
-					if !strings.Contains(detail, "`npm test` has failed 4 times") || !strings.Contains(detail, "FAIL src/cart.test.ts") ||
+					if !strings.Contains(detail, "`npm test` has failed 4 times") || !strings.Contains(detail, "Expected: 110") ||
+						!strings.Contains(detail, "Received: 100") || strings.Contains(detail, "FAIL src/cart.test.ts") ||
 						!strings.Contains(detail, "these files were edited: src/cart.ts") || len([]rune(detail)) > 1200 {
 						t.Errorf("nudge text: %s", detail)
 					}
@@ -246,8 +248,13 @@ func TestInterventionsThroughTheHookBinary(t *testing.T) {
 						t.Errorf("deny reason: %s", detail)
 					}
 				case "halt":
-					if !strings.HasSuffix(detail, "To let it continue, run: loopguard pause --session "+scenarioSession[:8]) {
+					if !strings.HasPrefix(detail, "LoopGuard stopped this turn: ") || !strings.Contains(detail, "Your next message continues normally.") ||
+						!strings.HasSuffix(detail, "(To turn LoopGuard off for this session: loopguard pause --session "+scenarioSession[:8]+")") {
 						t.Errorf("halt stopReason: %s", detail)
+					}
+				case "note":
+					if !strings.Contains(detail, "applied only to the previous turn") {
+						t.Errorf("post-halt note: %s", detail)
 					}
 				}
 			}
@@ -321,6 +328,7 @@ func classify(t *testing.T, stdout string) (kind, text string) {
 	var o struct {
 		Continue           *bool  `json:"continue"`
 		StopReason         string `json:"stopReason"`
+		SystemMessage      string `json:"systemMessage"`
 		HookSpecificOutput *struct {
 			HookEventName            string `json:"hookEventName"`
 			AdditionalContext        string `json:"additionalContext"`
@@ -336,7 +344,12 @@ func classify(t *testing.T, stdout string) (kind, text string) {
 	case h != nil && h.PermissionDecision != "" && h.PermissionDecision != "deny":
 		t.Fatalf("permissionDecision %q", h.PermissionDecision)
 	case o.Continue != nil && !*o.Continue:
+		if o.SystemMessage == "" || !strings.HasPrefix(o.SystemMessage, "LoopGuard stopped this turn: ") {
+			t.Errorf("halt systemMessage %q", o.SystemMessage)
+		}
 		return "halt", o.StopReason
+	case h != nil && h.HookEventName == "UserPromptSubmit" && h.AdditionalContext != "":
+		return "note", h.AdditionalContext
 	case h != nil && h.PermissionDecision == "deny":
 		return "deny", h.PermissionDecisionReason
 	case h != nil && h.AdditionalContext != "":

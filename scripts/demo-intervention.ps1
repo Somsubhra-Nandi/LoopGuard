@@ -134,6 +134,9 @@ try {
         } elseif ($h.permissionDecision -eq 'deny') {
             Write-Host '      <- DENY  permissionDecision "deny"; the tool call does not run. Reason given to Claude:' -ForegroundColor Yellow
             Write-Indented $h.permissionDecisionReason Yellow
+        } elseif ($h.additionalContext -and $h.hookEventName -eq 'UserPromptSubmit') {
+            Write-Host '      <- NOTE  additionalContext on UserPromptSubmit: the stop is over' -ForegroundColor Green
+            Write-Indented $h.additionalContext Green
         } elseif ($h.additionalContext) {
             Write-Host ('      <- NUDGE additionalContext on ' + $h.hookEventName + ', next to the tool result:') -ForegroundColor Cyan
             Write-Indented $h.additionalContext Cyan
