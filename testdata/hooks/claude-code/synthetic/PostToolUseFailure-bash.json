@@ -7,6 +7,6 @@
   "tool_name": "Bash",
   "tool_input": {"command": "npm test"},
   "tool_use_id": "toolu_02",
-  "error": "Exit code 1\nFAIL src/cart.test.ts\n  ● total › adds tax\n    Expected: 110\n    Received: 100",
+  "error": "Exit code 1\nFAIL src/cart.test.ts",
   "is_interrupt": false
 }
