@@ -18,20 +18,28 @@ import (
 var update = flag.Bool("update", false, "rewrite the expected *.golden files")
 
 // TestGoldenPayloads parses every payload under testdata/hooks/claude-code
-// (any depth: synthetic/ and one directory per captured Claude Code
-// version) and compares the mapped Event with the .golden file next to it.
-// Run with -update to write the .golden files, then review the diff.
+// (committed: synthetic/ and one structure-only directory per captured
+// Claude Code version) and, when it exists, testdata/private/hooks/claude-code
+// (local only: real payloads), at any depth, and compares the mapped Event
+// with the .golden file next to it. Run with -update to write the .golden
+// files, then review the diff.
 func TestGoldenPayloads(t *testing.T) {
-	root := filepath.Join("..", "..", "..", "testdata", "hooks", "claude-code")
+	testdata := filepath.Join("..", "..", "..", "testdata")
+	roots := []string{filepath.Join(testdata, "hooks", "claude-code")}
+	if private := filepath.Join(testdata, "private", "hooks", "claude-code"); dirExists(private) {
+		roots = append(roots, private)
+	}
 	var files []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".json") {
-			files = append(files, p)
+	for _, root := range roots {
+		err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && strings.HasSuffix(p, ".json") {
+				files = append(files, p)
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	if len(files) == 0 {
 		t.Fatal("no golden payloads found")
@@ -41,7 +49,7 @@ func TestGoldenPayloads(t *testing.T) {
 		installed[h.Event] = true
 	}
 	for _, f := range files {
-		rel, _ := filepath.Rel(root, f)
+		rel, _ := filepath.Rel(testdata, f)
 		t.Run(filepath.ToSlash(rel), func(t *testing.T) {
 			raw, err := os.ReadFile(f)
 			if err != nil {
@@ -134,4 +142,9 @@ func TestParseStripsBOM(t *testing.T) {
 	if err != nil || ev.Phase != event.PhaseStop || bytes.HasPrefix(ev.Raw, utf8BOM) {
 		t.Errorf("payload with a UTF-8 BOM: %+v, %v", ev, err)
 	}
+}
+
+func dirExists(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
 }
