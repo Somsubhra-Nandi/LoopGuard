@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Somsubhra-Nandi/loopguard/internal/home"
 )
 
 // Label verdicts.
@@ -43,16 +45,7 @@ func DetectedLabel(l *Loop, verdict string, at time.Time) Label {
 }
 
 // Home returns LoopGuard's data directory: $LOOPGUARD_HOME, or ~/.loopguard.
-func Home() (string, error) {
-	if h := os.Getenv("LOOPGUARD_HOME"); h != "" {
-		return h, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".loopguard"), nil
-}
+func Home() (string, error) { return home.Dir() }
 
 // DefaultLabelsPath returns <Home>/labels.jsonl.
 func DefaultLabelsPath() (string, error) {
