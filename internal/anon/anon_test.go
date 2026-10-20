@@ -46,12 +46,12 @@ func TestHomeUsers(t *testing.T) {
 
 func TestShortName(t *testing.T) {
 	for in, want := range map[string]string{
-		"Subhash Nandi": "SUBHAS",
-		"Jane Q-Doe":    "JANEQ-",
-		"jane":          "",
-		"ADMINI~1":      "",
-		"first.last":    "FIRSTL",
-		"Zoë Smith":     "",
+		"Jane Doe":   "JANEDO",
+		"Jane Q-Doe": "JANEQ-",
+		"jane":       "",
+		"ADMINI~1":   "",
+		"first.last": "FIRSTL",
+		"Zoë Smith":  "",
 	} {
 		if got := ShortName(in); got != want {
 			t.Errorf("ShortName(%q) = %q, want %q", in, got, want)

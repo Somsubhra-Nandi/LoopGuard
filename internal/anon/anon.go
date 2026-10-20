@@ -54,9 +54,9 @@ func HomeUsers(s string) []string {
 }
 
 // ShortName returns the stem of the Windows 8.3 short name of a long
-// directory name ("Subhash Nandi" → "SUBHAS", spelled SUBHAS~1 in
+// directory name ("Jane Doe" → "JANEDO", spelled JANEDO~1 in
 // paths), or "" if the name needs no short name. Temp paths often use it:
-// C:\Users\SUBHAS~1\AppData\Local\Temp.
+// C:\Users\JANEDO~1\AppData\Local\Temp.
 func ShortName(name string) string {
 	var b strings.Builder
 	for _, r := range strings.ToUpper(name) {
@@ -83,7 +83,7 @@ func ShortName(name string) string {
 // HomeReplacer replaces one home directory in text, in every spelling:
 // either separator, Git Bash (/c/...) and WSL (/mnt/c/...) forms of a
 // Windows path, Claude Code's project directory encoding (C--Users-name),
-// and the 8.3 short name of its last element (C:\Users\SUBHAS~1). Matching
+// and the 8.3 short name of its last element (C:\Users\JANEDO~1). Matching
 // ignores case, and a match must not continue into a longer name.
 type HomeReplacer struct {
 	re *regexp.Regexp // nil: nothing to replace
