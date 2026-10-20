@@ -175,8 +175,6 @@ func TestStubSubcommands(t *testing.T) {
 	}{
 		{[]string{"report"}, "M4"},
 		{[]string{"report", "abc123"}, "M4"},
-		{[]string{"pause"}, "M3"},
-		{[]string{"pause", "abc123"}, "M3"},
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {

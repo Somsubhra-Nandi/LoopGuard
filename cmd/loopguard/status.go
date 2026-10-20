@@ -17,13 +17,14 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
 
-// statusDecisions is how many would-have decisions status shows.
+// statusDecisions is how many decisions status shows.
 const statusDecisions = 10
 
 // statusReport is `loopguard status --json`.
 type statusReport struct {
 	Daemon    daemonStatus    `json:"daemon"`
-	Sessions  []store.Session `json:"active_sessions"`
+	Mode      modeReport      `json:"mode"`
+	Sessions  []sessionStatus `json:"active_sessions"`
 	Decisions []decisionView  `json:"decisions"`
 }
 
@@ -33,9 +34,15 @@ type daemonStatus struct {
 	Port    int     `json:"port,omitempty"`
 	Version string  `json:"version,omitempty"`
 	Uptime  float64 `json:"uptime_seconds,omitempty"`
-	Mode    string  `json:"mode"`
 	Capture bool    `json:"capture"`
 	Home    string  `json:"home"`
+}
+
+// sessionStatus is an active session, with the mode at its latest event.
+type sessionStatus struct {
+	store.Session
+	Mode    string `json:"mode,omitempty"`
+	ModeWhy string `json:"mode_why,omitempty"`
 }
 
 type decisionView struct {
@@ -47,11 +54,13 @@ func newStatusCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show the daemon, active sessions, and recent would-have decisions",
-		Long: `Show whether the daemon is up, the active Claude Code sessions (project,
-last activity, tool calls, failures), and the last 10 decisions LoopGuard
-would have made in enforce mode (nudge, deny, halt) with the detector and
-the reason. When the daemon is down, the decisions come from the database.`,
+		Short: "Show the mode, the daemon, active sessions, and recent decisions",
+		Long: `Show the mode (observe or enforce) and why, the pauses, whether the daemon
+is up, the active Claude Code sessions (project, last activity, tool calls,
+failures), and the last 10 decisions: real ones (enforce mode) and the ones
+LoopGuard would have made (observe mode), with the detector, the reason,
+and the outcome 10 tool calls later. When the daemon is down, the
+decisions come from the database.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			dir, err := home.Dir()
@@ -74,16 +83,17 @@ the reason. When the daemon is down, the decisions come from the database.`,
 }
 
 func collectStatus(dir string) statusReport {
-	r := statusReport{Daemon: daemonStatus{Mode: "observe", Home: dir, Capture: capture.FlagOn(dir)},
-		Sessions: []store.Session{}, Decisions: []decisionView{}}
+	r := statusReport{Daemon: daemonStatus{Home: dir, Capture: capture.FlagOn(dir)},
+		Sessions: []sessionStatus{}, Decisions: []decisionView{}}
 	cwds := map[string]string{} // session key → cwd
 	info, h, up := running(dir)
+	r.Mode = collectMode(dir, time.Now())
 	if up {
-		r.Daemon = daemonStatus{Up: true, PID: h.PID, Port: info.Port, Version: h.Version, Mode: "observe", Home: dir,
+		r.Daemon = daemonStatus{Up: true, PID: h.PID, Port: info.Port, Version: h.Version, Home: dir,
 			Uptime: time.Since(uptimeStart(info, h)).Seconds(), Capture: h.Capture || r.Daemon.Capture}
 		var list struct {
 			Sessions []struct {
-				store.Session
+				sessionStatus
 				Active bool `json:"active"`
 			} `json:"sessions"`
 		}
@@ -91,7 +101,7 @@ func collectStatus(dir string) statusReport {
 			for _, s := range list.Sessions {
 				cwds[s.Key] = s.Cwd
 				if s.Active && s.SessionID != doctorSession {
-					r.Sessions = append(r.Sessions, s.Session)
+					r.Sessions = append(r.Sessions, s.sessionStatus)
 				}
 			}
 		}
@@ -106,6 +116,9 @@ func collectStatus(dir string) statusReport {
 		return r
 	}
 	// Daemon down: the database still has the decisions.
+	if !fileExists(filepath.Join(dir, home.DBFile)) {
+		return r
+	}
 	st, err := store.Open(filepath.Join(dir, home.DBFile))
 	if err != nil {
 		return r
@@ -125,14 +138,15 @@ func collectStatus(dir string) statusReport {
 }
 
 func printStatus(out io.Writer, r statusReport, now time.Time) {
+	printMode(out, r.Mode)
 	d := r.Daemon
 	capt := "off"
 	if d.Capture {
 		capt = "on"
 	}
 	if d.Up {
-		fmt.Fprintf(out, "Daemon: up %s (pid %d, port %d, version %s), %s mode, capture %s\n",
-			shortDuration(time.Duration(d.Uptime*float64(time.Second))), d.PID, d.Port, d.Version, d.Mode, capt)
+		fmt.Fprintf(out, "Daemon: up %s (pid %d, port %d, version %s), capture %s\n",
+			shortDuration(time.Duration(d.Uptime*float64(time.Second))), d.PID, d.Port, d.Version, capt)
 	} else {
 		fmt.Fprintf(out, "Daemon: down (the next hook event starts it), capture %s\n", capt)
 	}
@@ -150,15 +164,19 @@ func printStatus(out io.Writer, r statusReport, now time.Time) {
 			if strings.Contains(s.Key, "/") {
 				name += " (subagent)"
 			}
-			fmt.Fprintf(out, "  %s\n    last activity %s ago, %d tool calls, %d failures", name, shortDuration(now.Sub(s.LastSeenAt)), s.ToolCalls, s.Failures)
+			fmt.Fprintf(out, "  %s  [%s]\n    last activity %s ago, %d tool calls, %d failures", name, shortSID(s.SessionID),
+				shortDuration(now.Sub(s.LastSeenAt)), s.ToolCalls, s.Failures)
 			if s.LoopsDetected > 0 {
 				fmt.Fprintf(out, ", %d %s", s.LoopsDetected, map[bool]string{true: "loop", false: "loops"}[s.LoopsDetected == 1])
+			}
+			if s.Mode != "" && s.Mode != r.Mode.Mode.Mode {
+				fmt.Fprintf(out, "\n    mode %s (%s)", s.Mode, s.ModeWhy)
 			}
 			fmt.Fprintln(out)
 		}
 	}
 
-	fmt.Fprintf(out, "\nWould have (observe mode, last %d)\n", statusDecisions)
+	fmt.Fprintf(out, "\nRecent decisions (last %d; real = enforced, would = observe mode)\n", statusDecisions)
 	if len(r.Decisions) == 0 {
 		fmt.Fprintln(out, "  nothing yet")
 	}
@@ -179,8 +197,24 @@ func printStatus(out io.Writer, r statusReport, now time.Time) {
 		if detector == "" {
 			detector = "?"
 		}
-		fmt.Fprintf(out, "  %-8s %-6s %-17s %s: %s\n", when, dv.Action, detector, project, clip(reason, 100))
+		kind := "would"
+		if dv.Mode == store.ModeEnforce {
+			kind = "real"
+		}
+		outcome := dv.Outcome
+		if outcome == "" {
+			outcome = "pending"
+		}
+		fmt.Fprintf(out, "  %-8s %-5s %-5s %-17s %-14s %s: %s\n", when, kind, dv.Action, detector, outcome, project, clip(reason, 100))
 	}
+}
+
+// shortSID is the session id as `loopguard pause --session` takes it.
+func shortSID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // shortDuration formats d as 45s, 12m, 3h05m, or 2d04h.

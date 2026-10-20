@@ -20,6 +20,7 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter"
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter/claudecode"
 	"github.com/Somsubhra-Nandi/loopguard/internal/capture"
+	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/daemon"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
@@ -196,6 +197,36 @@ func runDoctor(dir, settings string) []adapter.Check {
 			add("database", adapter.StatusOK, fmt.Sprintf("opens, schema v%d (%s)", v, dbPath), "")
 		}
 	}
+
+	// The config files and the mode they give.
+	m := collectMode(dir, time.Now())
+	switch c := m.Config; {
+	case c.Error != "":
+		add("config", adapter.StatusWarn, c.Path+" is invalid, so the defaults (observe mode) are used: "+c.Error,
+			"fix the file, or move it aside; 'loopguard mode' writes a new one")
+	case !c.Exists:
+		add("config", adapter.StatusOK, "no "+config.GlobalFile+" yet; the defaults apply ("+c.Path+")", "")
+	case len(c.Warnings) > 0:
+		add("config", adapter.StatusWarn, c.Path+": "+strings.Join(c.Warnings, "; "), "remove or fix the keys it names")
+	default:
+		add("config", adapter.StatusOK, "valid ("+c.Path+")", "")
+	}
+	if rp := m.Repo; rp != nil {
+		switch {
+		case rp.File.Error != "":
+			add("repo config", adapter.StatusWarn, rp.File.Path+" is invalid and ignored: "+rp.File.Error, "fix or remove it")
+		case len(rp.Notes) > 0 || len(rp.File.Warnings) > 0:
+			add("repo config", adapter.StatusWarn, strings.Join(append(rp.File.Warnings, rp.Notes...), "; "),
+				"a repo file can only tighten the config; remove the keys it ignores")
+		default:
+			add("repo config", adapter.StatusOK, "valid ("+rp.File.Path+"): "+rp.Mode.Mode+" for this repo", "")
+		}
+	}
+	modeDetail := m.Mode.Mode + " (" + m.Mode.Why + ")"
+	if n := len(m.Pauses); n > 0 {
+		modeDetail += fmt.Sprintf("; %d %s in effect (loopguard pause)", n, map[bool]string{true: "pause", false: "pauses"}[n == 1])
+	}
+	add("mode", adapter.StatusOK, modeDetail, "")
 
 	// Capture mode.
 	flag := capture.FlagOn(dir)

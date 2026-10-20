@@ -8,11 +8,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter"
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter/claudecode"
+	"github.com/Somsubhra-Nandi/loopguard/internal/config"
+	"github.com/Somsubhra-Nandi/loopguard/internal/home"
 	"github.com/Somsubhra-Nandi/loopguard/internal/textdiff"
 )
 
@@ -101,7 +104,7 @@ func defaultHookPath() (string, error) {
 func newInitCmd() *cobra.Command {
 	var sf settingsFlags
 	var hook string
-	var dryRun bool
+	var dryRun, enforce bool
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Install LoopGuard's hooks into Claude Code's settings",
@@ -115,7 +118,13 @@ are. Running it again changes nothing (or updates LoopGuard's hooks, e.g.
 after you move the binaries). Before the first change it saves a backup
 next to the file (settings.json.loopguard.bak). The hooks run
 loopguard-hook (by default the one next to this executable) by absolute
-path, so it needn't be on PATH. Undo with 'loopguard uninstall'.`,
+path, so it needn't be on PATH. Undo with 'loopguard uninstall'.
+
+On a new install it also writes config.yaml in the LoopGuard home: mode
+enforce, but observe only for the first 3 days (observe_until), so you can
+see in 'loopguard status' what it would do before it does anything. With
+--enforce it enforces at once. An existing install keeps its mode
+('loopguard mode' changes it).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			settings, err := sf.path()
@@ -133,10 +142,18 @@ path, so it needn't be on PATH. Undo with 'loopguard uninstall'.`,
 			if fi, err := os.Stat(hook); err != nil || fi.IsDir() {
 				return fmt.Errorf("no hook binary at %s: build it there (go build -o %s ./cmd/loopguard-hook) or pass --hook", hook, quoteArg(hook))
 			}
+			dir, err := home.Dir()
+			if err != nil {
+				return err
+			}
+			// Decided before anything is written: a new install has no
+			// config.yaml, no database, and no LoopGuard hooks yet.
+			existing := fileExists(filepath.Join(dir, config.GlobalFile)) || fileExists(filepath.Join(dir, home.DBFile))
 			r, err := claudecode.New().Install(adapter.InstallOpts{Settings: settings, Hook: hook, DryRun: dryRun})
 			if err != nil {
 				return err
 			}
+			newInstall := !existing && r.Changed && len(r.Updated) == 0 && len(r.Added) > 0
 			out := cmd.OutOrStdout()
 			if dryRun {
 				printDryRun(out, r)
@@ -146,7 +163,7 @@ path, so it needn't be on PATH. Undo with 'loopguard uninstall'.`,
 			if !r.Changed {
 				fmt.Fprintf(out, "LoopGuard hooks are already installed in %s; nothing changed.\n", settings)
 				fmt.Fprintf(out, "  hook: %s\n", hook)
-				return nil
+				return initMode(out, enforce, false)
 			}
 			fmt.Fprintf(out, "Installed LoopGuard hooks in %s\n", settings)
 			if len(r.Added) > 0 {
@@ -167,7 +184,9 @@ path, so it needn't be on PATH. Undo with 'loopguard uninstall'.`,
 			default:
 				fmt.Fprintln(out, "  backup:  none needed (the file is new)")
 			}
-			fmt.Fprintln(out, "Mode: observe. LoopGuard records what it would do and never blocks Claude Code.")
+			if err := initMode(out, enforce, newInstall); err != nil {
+				return err
+			}
 			fmt.Fprintln(out, "New Claude Code sessions use the hooks; restart sessions that are already open.")
 			fmt.Fprintln(out, "Check it with: loopguard doctor")
 			fmt.Fprintf(out, "Undo with:     %s\n", sf.undo())
@@ -177,7 +196,44 @@ path, so it needn't be on PATH. Undo with 'loopguard uninstall'.`,
 	sf.register(cmd)
 	cmd.Flags().StringVar(&hook, "hook", "", "path of the loopguard-hook binary (default: next to this executable)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the change as a diff and write nothing")
+	cmd.Flags().BoolVar(&enforce, "enforce", false, "enforce from now on, skipping a new install's observe-only days")
 	return cmd
+}
+
+// initMode sets the mode on init (LLD §12, TDD D-8): --enforce enforces at
+// once; a new install enforces after observe_days_after_install days of
+// observing; an existing install keeps its mode. It prints the result.
+func initMode(out io.Writer, enforce, newInstall bool) error {
+	dir, err := home.Dir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, config.GlobalFile)
+	switch {
+	case enforce:
+		if err := config.EditFile(path, config.Edit{Key: "mode", Value: config.ModeEnforce},
+			config.Edit{Key: "observe_until", Remove: true}); err != nil {
+			return err
+		}
+	case newInstall:
+		days := config.Defaults().ObserveDaysAfterInstall
+		until := time.Now().UTC().Add(time.Duration(days) * 24 * time.Hour).Truncate(time.Second)
+		if err := config.EditFile(path, config.Edit{Key: "mode", Value: config.ModeEnforce},
+			config.Edit{Key: "observe_until", Value: until.Format(time.RFC3339)}); err != nil {
+			return err
+		}
+	}
+	m := collectMode(dir, time.Now())
+	fmt.Fprintf(out, "Mode: %s (%s)\n", m.Mode.Mode, m.Mode.Why)
+	switch m.Mode.Mode {
+	case config.ModeEnforce:
+		fmt.Fprintln(out, "  LoopGuard nudges looping agents, blocks the repeated action, and halts them if needed.")
+		fmt.Fprintln(out, "  Pause it with: loopguard pause --all --for 2h   Observe only: loopguard mode observe")
+	default:
+		fmt.Fprintln(out, "  LoopGuard records what it would do (loopguard status) and never blocks Claude Code.")
+		fmt.Fprintln(out, "  Enforce now with: loopguard mode enforce")
+	}
+	return nil
 }
 
 func newUninstallCmd() *cobra.Command {

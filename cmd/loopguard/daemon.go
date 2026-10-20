@@ -195,7 +195,8 @@ func newDaemonStatusCmd() *cobra.Command {
 			fmt.Fprintf(out, "  store:    %s\n", store)
 			fmt.Fprintf(out, "  sessions: %s active\n", active)
 			fmt.Fprintf(out, "  home:     %s\n", dir)
-			fmt.Fprintln(out, "  mode:     observe (decisions are recorded, never enforced)")
+			m := collectMode(dir, time.Now())
+			fmt.Fprintf(out, "  mode:     %s (%s)\n", m.Mode.Mode, m.Mode.Why)
 			return nil
 		},
 	}
