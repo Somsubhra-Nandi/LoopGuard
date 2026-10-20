@@ -29,7 +29,7 @@ Version 1 (`schema_version: 1`). New fields can be added without a version bump.
   "near_misses": [ /* NearMiss, closest first */ ],
   // Only with --soft-failures:
   "soft_failures": [ /* SoftFailure, by stream then call */ ],
-  "soft_failure_markers": {"Error:": 34, "FAILED": 23}  // calls per marker (a call can count for several)
+  "soft_failure_markers": {"Traceback": 12, "FAILED": 9}  // calls per marker (a call can count for several)
   // Cost (API-equivalent USD) arrives in M4.
 }
 ```

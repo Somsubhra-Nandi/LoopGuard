@@ -15,20 +15,26 @@ type Builder struct {
 	// ReadOnly matches read/search commands (grep, cat, git log, ...): their
 	// output quotes other text, so failure markers in it are not a failure.
 	ReadOnly *CommandMatcher
+	// ErrorMarker matches the test and build runner families for which an
+	// "Error:" line is a soft failure.
+	ErrorMarker *FamilyMatcher
 }
 
 // NewBuilder returns a Builder using the given polling and read-only
-// command matchers (either may be nil).
+// command matchers (either may be nil). The "Error:" soft-failure marker
+// applies to no family; set ErrorMarker for that.
 func NewBuilder(poll, readOnly *CommandMatcher) *Builder {
 	return &Builder{Poll: poll, ReadOnly: readOnly}
 }
 
 // BuilderFor returns a Builder configured by th.
 func BuilderFor(th config.Thresholds) *Builder {
-	return NewBuilder(
+	b := NewBuilder(
 		NewCommandMatcher(th.PollingFamilies, th.PollingPatterns),
 		NewCommandMatcher(th.ReadOnlyCommands, nil),
 	)
+	b.ErrorMarker = NewFamilyMatcher(th.ErrorMarkerFamilies)
+	return b
 }
 
 // Build derives a ToolCall from a post (or post_failure) event. It reads
@@ -76,7 +82,7 @@ func (b *Builder) Build(ev *event.Event) *event.ToolCall {
 	norm := Text(out)
 	c.ResultFP = HashString(norm)
 	failed := ev.IsError || ev.Phase == event.PhasePostFailure
-	if !failed && ev.ToolName == event.ToolBash && !readOnly && IsSoftFailure(out) {
+	if !failed && ev.ToolName == event.ToolBash && !readOnly && IsSoftFailure(out, b.ErrorMarker.Matches(c.Family)) {
 		failed = true
 	}
 	if failed {

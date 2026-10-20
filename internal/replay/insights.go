@@ -77,6 +77,7 @@ type Streak struct {
 // stream.
 type insights struct {
 	th   config.Thresholds
+	errM *normalize.FamilyMatcher // families whose "Error:" lines are soft failures
 	st   Stream
 	cwd  string
 	near []NearMiss
@@ -141,7 +142,7 @@ type stallRun struct {
 }
 
 func newInsights(th config.Thresholds, st Stream) *insights {
-	in := &insights{th: th, st: st, fams: map[string]*FamilyFailures{}, streaks: map[string]*streakState{}}
+	in := &insights{th: th, errM: normalize.NewFamilyMatcher(th.ErrorMarkerFamilies), st: st, fams: map[string]*FamilyFailures{}, streaks: map[string]*streakState{}}
 	in.resetTurn()
 	return in
 }
@@ -218,7 +219,7 @@ func (in *insights) familyStats(c *event.ToolCall, n int) {
 
 func (in *insights) softFailure(c *event.ToolCall, n int) {
 	out := redact.String(normalize.OutputText(c.Event.Output))
-	markers, line := normalize.SoftFailureMarkers(out)
+	markers, line := normalize.SoftFailureMarkers(out, in.errM.Matches(c.Family))
 	in.soft = append(in.soft, SoftFailure{
 		SessionID: in.st.SessionID, AgentID: in.st.AgentID, Call: n, Family: c.Family,
 		Command: clipText(c.Command, 160), Markers: markers, Line: clipText(normalize.Text(line), 200),

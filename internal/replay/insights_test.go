@@ -141,23 +141,24 @@ func TestSoftFailures(t *testing.T) {
 	b.Prompt("go")
 	b.Bash("python app.py", "starting\nTraceback (most recent call last):\nKeyError: 'x' token="+replaytest.Secret, false)
 	b.Bash(`grep -rn "Error:" src`, "src/a.ts:3: throw new Error: bad", false) // read-only: not a failure
-	b.Bash("npm run build", "1 FAILED\nError: build broke", false)
-	b.Bash("npm run build", "Exit code 2\nError: real failure", true) // a hard failure, not soft
+	b.Bash("pytest", "FAILED tests/test_a.py::test_x\nError: build broke", false)
+	b.Bash("npm run build", "Exit code 2\nError: real failure", true)          // a hard failure, not soft
+	b.Bash("node script.js", "Error: printed, not failed\nsee: FAILED", false) // no marker applies
 	res := runOne(t, b.String())
 	if len(res.SoftFailures) != 2 {
 		t.Fatalf("soft failures = %+v", res.SoftFailures)
 	}
 	a, c := res.SoftFailures[0], res.SoftFailures[1]
-	// "KeyError: 'x'" also contains the "Error:" marker; the line shown is
-	// the first marker in the text.
-	if a.Call != 1 || a.Family != "python" || strings.Join(a.Markers, ",") != "Error:,Traceback" || !strings.HasPrefix(a.Line, "Traceback") {
+	// "KeyError: 'x'" doesn't start its line with "Error:", and python is
+	// not a test runner: only Traceback counts.
+	if a.Call != 1 || a.Family != "python" || strings.Join(a.Markers, ",") != "Traceback" || !strings.HasPrefix(a.Line, "Traceback") {
 		t.Errorf("first soft failure = %+v", a)
 	}
-	if c.Call != 3 || strings.Join(c.Markers, ",") != "FAILED,Error:" || c.Line != "1 FAILED" {
+	if c.Call != 3 || strings.Join(c.Markers, ",") != "FAILED,Error:" || c.Line != "FAILED tests/test_a.py::test_x" {
 		t.Errorf("second soft failure = %+v", c)
 	}
 	counts := MarkerCounts(res.SoftFailures)
-	if counts["FAILED"] != 1 || counts["Error:"] != 2 || counts["Traceback"] != 1 {
+	if counts["FAILED"] != 1 || counts["Error:"] != 1 || counts["Traceback"] != 1 {
 		t.Errorf("marker counts = %v", counts)
 	}
 	for _, s := range res.SoftFailures {

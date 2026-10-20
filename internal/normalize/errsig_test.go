@@ -151,15 +151,38 @@ func TestSignatureKeyLines(t *testing.T) {
 }
 
 func TestSoftFailure(t *testing.T) {
-	for _, s := range []string{"1 FAILED", "Error: boom", "Traceback (most recent", "panic: x", "npm ERR! code 1", "error[E0308]", "✕ adds", "AssertionError"} {
-		if !IsSoftFailure(s) {
-			t.Errorf("IsSoftFailure(%q) = false", s)
+	for _, s := range []string{
+		"FAILED tests/test_a.py::test_add", "ok\n  FAILED x", "Error: boom", "Traceback (most recent",
+		"panic: x", "npm ERR! code 1", "error[E0308]", "  ✕ adds (3 ms)", "\tAssertionError", "a\r\nError: b",
+	} {
+		if !IsSoftFailure(s, true) {
+			t.Errorf("IsSoftFailure(%q, true) = false", s)
 		}
 	}
-	for _, s := range []string{"ok", "PASS", "0 errors", "all good"} {
-		if IsSoftFailure(s) {
-			t.Errorf("IsSoftFailure(%q) = true", s)
+	for _, s := range []string{
+		"ok", "PASS", "0 errors", "all good",
+		// Markers count only at the start of a line.
+		"1 FAILED", "KeyError: 'x'", "raise ValueError: bad", "log: panic: recovered", "test result: FAILED.",
+	} {
+		if IsSoftFailure(s, true) {
+			t.Errorf("IsSoftFailure(%q, true) = true", s)
 		}
+	}
+	// "Error:" counts only for test and build runners.
+	if IsSoftFailure("Error: not found", false) {
+		t.Error(`"Error:" counted for a non-runner command`)
+	}
+	if !IsSoftFailure("Error: x\nTraceback (most recent call last):", false) {
+		t.Error("other markers must still count for non-runner commands")
+	}
+
+	markers, line := SoftFailureMarkers("KeyError: 'k'\nError: e\n  FAILED t", true)
+	if strings.Join(markers, ",") != "FAILED,Error:" || line != "Error: e" {
+		t.Errorf("SoftFailureMarkers = %q, %q", markers, line)
+	}
+	markers, line = SoftFailureMarkers("Error: e\n  FAILED t", false)
+	if strings.Join(markers, ",") != "FAILED" || line != "  FAILED t" {
+		t.Errorf("SoftFailureMarkers without Error: = %q, %q", markers, line)
 	}
 }
 

@@ -18,6 +18,11 @@ type Thresholds struct {
 	// read/search commands. Their output quotes files and logs, so failure
 	// markers in it ("Error:", "FAILED") never make the call a soft failure.
 	ReadOnlyCommands []string
+
+	// ErrorMarkerFamilies are command-family prefixes (test and build
+	// runners) for which an "Error:" line counts as a soft failure. Other
+	// programs print "Error:" lines as ordinary output.
+	ErrorMarkerFamilies []string
 }
 
 // DetectorThresholds configures the detectors.
@@ -138,6 +143,13 @@ func Default() Thresholds {
 			"grep", "rg", "ag", "cat", "head", "tail", "less", "more", "find", "fd", "ls", "tree", "wc",
 			"git log", "git diff", "git show", "git status", "git blame", "git grep",
 			"select-string", "get-content", "findstr", "type",
+		},
+		ErrorMarkerFamilies: []string{
+			"pytest", "jest", "vitest", "go test", "cargo test", "cargo build", "tsc",
+			"npm test", "yarn test", "pnpm test", "bun test",
+			"npm run test", "yarn run test", "pnpm run test", "bun run test",
+			"npx jest", "npx vitest", "npx tsc",
+			"mvn", "mvnw", "gradle", "gradlew", "make", "dotnet test",
 		},
 	}
 }

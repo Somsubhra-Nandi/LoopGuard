@@ -326,6 +326,38 @@ func (m *CommandMatcher) Matches(c Command) bool {
 	return false
 }
 
+// FamilyMatcher matches command families ("go test", "npx jest") against
+// word prefixes: "cargo test" matches the family "cargo test", not "cargo".
+type FamilyMatcher struct {
+	prefixes [][]string
+}
+
+// NewFamilyMatcher builds a matcher from family prefixes.
+func NewFamilyMatcher(prefixes []string) *FamilyMatcher {
+	m := &FamilyMatcher{}
+	for _, f := range prefixes {
+		if ws := strings.Fields(strings.ToLower(f)); len(ws) > 0 {
+			m.prefixes = append(m.prefixes, ws)
+		}
+	}
+	return m
+}
+
+// Matches reports whether the family's words start with one of the
+// prefixes.
+func (m *FamilyMatcher) Matches(family string) bool {
+	if m == nil {
+		return false
+	}
+	words := strings.Fields(family)
+	for _, p := range m.prefixes {
+		if hasPrefix(words, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func hasPrefix(words, prefix []string) bool {
 	if len(words) < len(prefix) {
 		return false

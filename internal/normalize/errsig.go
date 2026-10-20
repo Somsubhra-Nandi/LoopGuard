@@ -69,27 +69,58 @@ func IsKeyLine(line string) bool {
 const maxSimLines = 40
 
 // softFailureMarkers flag a failure in the output of a command that
-// exited 0 (LLD §4.4).
+// exited 0 (LLD §4.4). A marker counts only at the start of a line (after
+// optional whitespace), and errorMarker only for test and build runners
+// (config.Thresholds.ErrorMarkerFamilies).
 var softFailureMarkers = []string{
-	"FAILED", "Error:", "Traceback", "panic:", "npm ERR!", "error[E", "✕", "AssertionError",
+	"FAILED", errorMarker, "Traceback", "panic:", "npm ERR!", "error[E", "✕", "AssertionError",
 }
 
-// IsSoftFailure reports whether output contains a failure marker.
-func IsSoftFailure(output string) bool {
+const errorMarker = "Error:"
+
+// IsSoftFailure reports whether output has a failure marker at the start
+// of a line. withError says whether the "Error:" marker applies (the
+// command is a test or build runner).
+func IsSoftFailure(output string, withError bool) bool {
 	for _, m := range softFailureMarkers {
-		if strings.Contains(output, m) {
+		if (withError || m != errorMarker) && markerIndex(output, m) >= 0 {
 			return true
 		}
 	}
 	return false
 }
 
+// markerIndex returns the index of the first occurrence of m that starts a
+// line (after optional spaces or tabs), or -1.
+func markerIndex(s, m string) int {
+	off := 0
+	for {
+		i := strings.Index(s[off:], m)
+		if i < 0 {
+			return -1
+		}
+		i += off
+		j := i
+		for j > 0 && (s[j-1] == ' ' || s[j-1] == '\t') {
+			j--
+		}
+		if j == 0 || s[j-1] == '\n' || s[j-1] == '\r' {
+			return i
+		}
+		off = i + len(m)
+	}
+}
+
 // SoftFailureMarkers returns the failure markers in output, in marker-list
-// order, and the line holding the first one found in the text.
-func SoftFailureMarkers(output string) (markers []string, line string) {
+// order, and the line holding the first one found in the text. Markers
+// count as in IsSoftFailure.
+func SoftFailureMarkers(output string, withError bool) (markers []string, line string) {
 	first := -1
 	for _, m := range softFailureMarkers {
-		i := strings.Index(output, m)
+		if !withError && m == errorMarker {
+			continue
+		}
+		i := markerIndex(output, m)
 		if i < 0 {
 			continue
 		}

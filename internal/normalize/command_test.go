@@ -227,6 +227,30 @@ func TestBuild(t *testing.T) {
 		t.Error("soft failure (exit 0 + Traceback) not detected")
 	}
 
+	// Soft-failure markers count at the start of a line only, and "Error:"
+	// only for test and build runners.
+	for _, tc := range []struct {
+		cmd, out string
+		want     bool
+	}{
+		{`python -c "print(\"KeyError: 'x'\")"`, "KeyError: 'x'", false},
+		{`python -c "print('Error: x')"`, "Error: x", false},
+		{"pytest -q", "..F\nFAILED tests/test_add.py::test_add - assert 1 == 2\n1 failed, 2 passed", true},
+		{"python -m pytest", "Error: fixture 'db' not found", true},
+		{"npx jest", "  Error: expected 3", true},
+		{"go test ./...", "see the log: Error: x", false},
+		{"node build.js", "1 FAILED", false},
+	} {
+		c := b.Build(&event.Event{
+			Phase: event.PhasePost, ToolName: event.ToolBash,
+			Input:  json.RawMessage(fmt.Sprintf(`{"command":%q}`, tc.cmd)),
+			Output: json.RawMessage(fmt.Sprintf(`{"stdout":%q}`, tc.out)),
+		})
+		if c.Failed() != tc.want {
+			t.Errorf("%s with output %q: failed = %v, want %v", tc.cmd, tc.out, c.Failed(), tc.want)
+		}
+	}
+
 	// Read/search commands quote other text: failure markers in their
 	// output are not a failure.
 	for _, cmd := range []string{
