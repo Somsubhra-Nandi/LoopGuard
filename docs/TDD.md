@@ -35,9 +35,18 @@ Existing tools mostly address **spend** (budget caps in LLM gateways and agent o
 | Detector precision on the labeled corpus (nudge level) | ≥ 0.90 |
 | Detector recall on the labeled corpus | ≥ 0.70 |
 | Nudge recovery rate (`recovered` / nudges in enforce mode) | ≥ 40% |
-| Hook overhead p99 | < 50 ms |
+| Hook overhead p99 | macOS/Linux: < 50 ms. Windows: within ~15 ms of the process-start floor (an empty Go program on the same machine; LLD §10) |
 | Time from install to first useful output (`replay`) | < 2 min |
 | Adoption after launch (first 60 days) | 300+ GitHub stars, 50+ weekly active installs (opt-in `loopguard stats --share` counts) |
+
+**Measured hook overhead** (M2-B, Windows 11 development machine, `TestHookLatency`: 500 calls each, interleaved, against a real daemon, process start to exit):
+
+| Run | Empty program (floor) p50 / p95 / p99 | `loopguard-hook` p50 / p95 / p99 | `loopguard hook` p50 / p95 / p99 |
+|---|---|---|---|
+| 1 | 28.7 / 32.5 / 37.2 ms | 37.8 / 43.6 / 49.4 ms (+12.2 ms at p99) | 73.4 / 80.1 / 90.2 ms |
+| 2 | 28.9 / 39.3 / 44.9 ms | 36.9 / 49.1 / 55.8 ms (+10.9 ms at p99) | 65.1 / 77.2 / 82.4 ms |
+
+`loopguard-hook` meets the Windows target (within ~15 ms of the floor). The floor itself moves with machine load and antivirus scanning (a quiet run measured 15 / 22 / 25 ms). macOS/Linux numbers: not measured yet; run `LOOPGUARD_BENCH_CALLS=500 go test ./cmd/loopguard-hook -run HookLatency -v` there.
 
 ---
 

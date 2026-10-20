@@ -16,15 +16,20 @@ This document specifies modules, data structures, algorithms, schemas, and inter
 
 ```
 loopguard/
-├── cmd/loopguard/main.go           # cobra root: hook, daemon, init, uninstall, doctor, status, report, replay, pause, tail
+├── cmd/loopguard/main.go           # cobra root: hook, daemon, init, uninstall, doctor, status, capture, report, replay, pause, tail
+├── cmd/loopguard-hook/main.go      # the binary the hooks run: only the shim, no cobra, minimal imports (fast start)
 ├── internal/
 │   ├── event/                      # core types: Event, ToolCall, Decision, Signal
 │   ├── adapter/
 │   │   ├── adapter.go              # Adapter interface + registry
 │   │   ├── claudecode/             # parse CC hook JSON, render CC decisions, install into settings.json
 │   │   └── codex/                  # parse Codex hook JSON, render decisions, install into hooks.json/config.toml
-│   ├── shim/                       # `loopguard hook`: stdin → daemon → stdout/exit, auto-start daemon
+│   ├── shim/                       # loopguard-hook and `loopguard hook`: stdin → daemon → stdout/exit, auto-start daemon
 │   ├── daemon/                     # http server, auth, session manager, actors, lifecycle
+│   ├── capture/                    # capture mode (flag file), payload capture, anonymized export for golden tests
+│   ├── home/                       # LoopGuard home: daemon.json, token; home/homedir is the dependency-free part the shim uses
+│   ├── proc/                       # detached spawn and pid liveness (package syscall only)
+│   ├── textdiff/                   # unified line diff for `init --dry-run`
 │   ├── normalize/                  # text normalizer, command parser, error-signature extractor, simhash
 │   ├── session/                    # SessionState, ring buffers, per-file history, progress tracker
 │   ├── detect/                     # Detector interface + exact_repeat, repeated_failure, oscillation, read_thrash, stall, budget
@@ -173,28 +178,31 @@ Rules:
 
 ### 3.3 Claude Code: installed config
 
-Merged into `~/.claude/settings.json` (user scope; `--project` flag → `.claude/settings.local.json`):
+`loopguard init` merges this into the user settings (`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json`); `--project` writes the repo's `.claude/settings.local.json` instead, and `--settings <file>` any file. `HOOK` is the **absolute path** of `loopguard-hook` (by default the one next to the `loopguard` executable; `--hook` overrides):
 
 ```json
 {
   "hooks": {
-    "SessionStart":       [{ "hooks": [{ "type": "command", "command": "loopguard", "args": ["hook", "--agent", "claude-code"], "timeout": 5 }] }],
-    "UserPromptSubmit":   [{ "hooks": [{ "type": "command", "command": "loopguard", "args": ["hook", "--agent", "claude-code"], "timeout": 2 }] }],
-    "PreToolUse":         [{ "matcher": "*", "hooks": [{ "type": "command", "command": "loopguard", "args": ["hook", "--agent", "claude-code"], "timeout": 2 }] }],
-    "PostToolUse":        [{ "matcher": "*", "hooks": [{ "type": "command", "command": "loopguard", "args": ["hook", "--agent", "claude-code"], "timeout": 2 }] }],
-    "PostToolUseFailure": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "loopguard", "args": ["hook", "--agent", "claude-code"], "timeout": 2 }] }],
-    "PostToolBatch":      [{ "hooks": [{ "type": "command", "command": "loopguard", "args": ["hook", "--agent", "claude-code"], "timeout": 2 }] }],
-    "Stop":               [{ "hooks": [{ "type": "command", "command": "loopguard", "args": ["hook", "--agent", "claude-code"], "timeout": 2 }] }],
-    "SessionEnd":         [{ "hooks": [{ "type": "command", "command": "loopguard", "args": ["hook", "--agent", "claude-code"], "timeout": 1 }] }]
+    "SessionStart":       [{ "hooks": [{ "type": "command", "command": "HOOK", "args": ["--agent", "claude-code"], "timeout": 5 }] }],
+    "UserPromptSubmit":   [{ "hooks": [{ "type": "command", "command": "HOOK", "args": ["--agent", "claude-code"], "timeout": 2 }] }],
+    "PreToolUse":         [{ "matcher": "*", "hooks": [{ "type": "command", "command": "HOOK", "args": ["--agent", "claude-code"], "timeout": 2 }] }],
+    "PostToolUse":        [{ "matcher": "*", "hooks": [{ "type": "command", "command": "HOOK", "args": ["--agent", "claude-code"], "timeout": 2 }] }],
+    "PostToolUseFailure": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "HOOK", "args": ["--agent", "claude-code"], "timeout": 2 }] }],
+    "PostToolBatch":      [{ "hooks": [{ "type": "command", "command": "HOOK", "args": ["--agent", "claude-code"], "timeout": 2 }] }],
+    "Stop":               [{ "hooks": [{ "type": "command", "command": "HOOK", "args": ["--agent", "claude-code"], "timeout": 2 }] }],
+    "SessionEnd":         [{ "hooks": [{ "type": "command", "command": "HOOK", "args": ["--agent", "claude-code"], "timeout": 1 }] }]
   }
 }
 ```
 
-- Exec form (`args`) avoids shell quoting issues and works on Windows with a real `.exe`.
-- The installer writes the **absolute path** of the binary into `command` when `loopguard` isn't on the PATH that Claude Code inherits.
+- Exec form (`command` + `args`) avoids shell quoting issues: a path with spaces works, and on Windows it runs the real `.exe`. The path is always absolute, so the PATH Claude Code inherits doesn't matter.
+- **LoopGuard's hooks are recognized by the command's base name** (`loopguard-hook` or `loopguard-hook.exe`, any directory, either slash). That makes `init` idempotent and `uninstall` remove only ours.
+- **Merge, never overwrite:** every other setting and every other tool's hooks (including ones in the same matcher group) are kept; the file's key order, indentation, and line endings are kept too. `init` puts exactly one hook, as above, on each event: a LoopGuard hook that differs (old path, timeout) is replaced where it is; LoopGuard hooks on events not in the table are removed. Unchanged → nothing is written.
+- **Backup** before the first change: `<file>.loopguard.bak`, never overwritten. A file that isn't valid JSON (or whose `hooks` isn't an object of arrays) is refused, untouched. `--dry-run` prints a unified diff. The file is replaced atomically (temp file + rename).
+- `uninstall` removes LoopGuard's hooks from every event (and an event or `hooks` left empty), nothing else, and keeps the backup.
 - `onFailure` is never set to `"block"`, so LoopGuard stays fail-open.
 - **Alternative (v0.3+):** `type: "http"` hooks pointing straight at the daemon save the process spawn. The trade-off: when the daemon is down, Claude Code shows a non-blocking hook-error notice. Offer it as an opt-in `--transport http`.
-- Plugin packaging: the same structure in a plugin's `hooks/hooks.json`, with `${CLAUDE_PLUGIN_ROOT}/bin/loopguard`.
+- Plugin packaging: the same structure in a plugin's `hooks/hooks.json`, with `${CLAUDE_PLUGIN_ROOT}/bin/loopguard-hook`.
 
 ### 3.4 Codex: mapping (verify per version)
 
@@ -244,17 +252,17 @@ Implemented as a single-pass scanner (temp-path and RFC-date regexes run only be
 
 For bash: parse the AST and take the first "real" command of each pipeline (the producer: `npm test 2>&1 | tail` → `npm test`) and every command of a list (`&&`, `||`, `;`), recursing into subshells, blocks, `if`/`for`/`while` bodies, and `bash|sh|zsh -c '…'`.
 
-- **Skipped** (setup, not the result): `cd`, `pushd`, `popd`, `export`, `source`, `.`, `set`, `unset`, `alias`, `true`, `:`, `local`, `declare`, `typeset`, `readonly`, `shopt`, `trap`.
+- **Skipped** (setup, not the result): `cd`, `pushd`, `popd`, `export`, `source`, `.`, `set`, `unset`, `alias`, `true`, `:`, `local`, `declare`, `typeset`, `readonly`, `shopt`, `trap`; **leading `NAME=value` assignments** (`FOO=bar npm test` → `npm test`, also in the whitespace fallback); and **PowerShell variable assignments** (`$env:FOO='x'`, `$x = 1`), so `$env:FOO='x'; npm test` → `npm test`.
 - **Wrappers stripped**, with their own flags and arguments: `time`, `env` (and its `X=Y`), `command`, `exec`, `nohup`, `sudo` (and `-u user`), `nice` (and its level), `timeout` (and its duration), `xargs`.
 - The command name is lower-cased, with its directory and a Windows extension (`.exe`, `.cmd`, `.bat`, `.ps1`) removed.
 - **Family** = command name + the first argument **only if it is the first argument and looks like a subcommand** (`^[a-z][a-z0-9:_-]*$`). So: `npm test`, `npx jest`, `go test`, `cargo build`, but `pytest tests/x.py` → `pytest`, `pytest -k foo` → `pytest`, `git -C dir status` → `git`, `sleep 30` → `sleep`. Flag arity can't be known in general, so only the first argument counts.
 - **Runners:** `python|python3|py -m X …` and `uv|poetry|pipenv|hatch|pdm run X …` take X's family (`python -m pytest` → `pytest`). `npm|yarn|pnpm|bun run <script>` keep the script (`npm run build` ≠ `npm run test`).
 - Multi-command lines produce a family set; the **primary** family is the last command (usually the one whose result matters). Non-bash tools use the tool name as their family.
-- Commands that don't parse as bash (PowerShell, truncated heredocs) fall back to whitespace splitting.
+- Commands that don't parse as bash (PowerShell, truncated heredocs) fall back to whitespace splitting; quotes around the command word are dropped (`"C:\py\python.exe" -I` → `python`).
 
 **Polling commands** (exempt from D1/D2) are matched on the **primary command only**: its non-flag words must start with a polling prefix (`sleep`, `watch`, `gh run watch`, `gh pr checks`, `git status`, `docker ps`, `ls`), or its text must match a polling pattern (`^kubectl\b.*\s(-w|--watch)\b`, `^curl\b.*/health`). `sleep 5 && npm test` is not polling; `cd x && sleep 10` is. Both lists are configurable (`polling_families`, `polling_patterns`).
 
-**Read-only commands** (`grep`, `rg`, `ag`, `cat`, `head`, `tail`, `less`, `more`, `find`, `fd`, `ls`, `tree`, `wc`, `git log|diff|show|status|blame|grep`, `Select-String`, `Get-Content`, `findstr`, `type`; configurable as `read_only_commands`) are matched the same way. Their output quotes other text, so it is never a soft failure (§4.4); a non-zero exit is still a failure.
+**Read-only commands** (`grep`, `rg`, `ag`, `cat`, `head`, `tail`, `less`, `more`, `find`, `fd`, `ls`, `tree`, `wc`, `git log|diff|show|status|blame|grep`, `Select-String`, `Get-Content`, `findstr`, `type`, `docker logs`, `kubectl logs`, `aws logs`, `journalctl`, `curl`, `wget`, `echo`, `printf`; configurable as `read_only_commands`) are matched the same way. Their output quotes other text, so it is never a soft failure (§4.4); a non-zero exit is still a failure.
 
 ### 4.4 Error signature
 
@@ -540,7 +548,8 @@ type job struct { ev *event.Event; reply chan event.Decision }
 | `GET /v1/sessions/{id}` | Session detail: calls, signals, interventions, usage |
 | `POST /v1/sessions/{id}/pause` / `resume` | Pause enforcement for a session |
 | `GET /v1/stats?range=7d` | Loops caught, time and cost saved estimates |
-| `GET /healthz`, `GET /metrics` | Health and Prometheus metrics |
+| `GET /v1/decisions?limit=10` | Newest decisions of all sessions (in observe mode: what it would have done), with detector, reason, and time (`loopguard status`) |
+| `GET /healthz`, `GET /metrics` | Health (version, pid, home id, store, capture on/off, start time) and Prometheus metrics |
 | `POST /v1/shutdown` | Stop the daemon (`loopguard daemon stop`) |
 
 The adapter renders on the daemon side so the shim stays dumb. Only the shim has to be backward-compatible across versions.
@@ -550,8 +559,11 @@ The adapter renders on the daemon side so the shim stays dumb. Only the shim has
 ## 10. Hook shim (`internal/shim`)
 
 ```
-loopguard hook --agent claude-code
+loopguard-hook --agent claude-code      # what the installed hooks run
+loopguard hook --agent claude-code      # the same code path, kept for compatibility
 ```
+`loopguard-hook` (`cmd/loopguard-hook`) is a separate, minimal binary because it starts once per hook event: no cobra, no `fmt`, `encoding/json`, `net/http`, or crypto (a test enforces the import list). The request is a hand-written HTTP/1.0 POST over `net.Dial` (HTTP/1.0: the reply is never chunked and the connection closes after it); the reply `{"stdout","exit"}` is read by a small decoder fuzz-tested against `encoding/json`; `daemon.json`'s port is read without a JSON decoder (`home/homedir`). It starts the daemon from the `loopguard` executable next to it. `loopguard-hook --version` prints its version (for `doctor`).
+
 1. If `LOOPGUARD_DISABLE=1` → exit 0.
 2. Read all of stdin (cap 4 MB).
 3. Read `~/.loopguard/daemon.json`; if it's missing or the connection is refused → spawn `loopguard daemon --detach` (rate-limited via a lock file, once per 10 s) and **exit 0 immediately**. This event is lost, which is acceptable.
@@ -559,7 +571,7 @@ loopguard hook --agent claude-code
 5. On success: write `stdout` exactly and exit with `exit`. On any error or timeout: exit 0 with no output.
 6. Never write to stderr except under `LOOPGUARD_DEBUG=1`.
 
-Target cold-start of the Go binary: < 10 ms.
+**Performance target** (end to end: process start to exit, against a running daemon): **p99 < 50 ms on macOS and Linux; on Windows, within ~15 ms of the measured process-start floor** (an empty Go program on the same machine), because Windows process creation alone costs 15–45 ms depending on load and antivirus. Measured by `TestHookLatency` (`$env:LOOPGUARD_BENCH_CALLS=500; go test ./cmd/loopguard-hook -run HookLatency -v`); numbers in TDD §1.2.
 
 ---
 
@@ -578,6 +590,7 @@ CREATE TABLE sessions (
   last_seen_at   INTEGER NOT NULL,
   ended_at       INTEGER,
   tool_calls     INTEGER DEFAULT 0,
+  failures       INTEGER DEFAULT 0,        -- failed tool calls (migration 2)
   input_tokens   INTEGER DEFAULT 0,
   output_tokens  INTEGER DEFAULT 0,
   cache_read     INTEGER DEFAULT 0,
@@ -622,9 +635,12 @@ CREATE TABLE interventions (
   id          INTEGER PRIMARY KEY,
   session_key TEXT NOT NULL,
   seq         INTEGER NOT NULL,
+  ts          INTEGER,            -- unix ms (migration 2)
   loop_key    TEXT NOT NULL,
+  detector    TEXT,               -- (migration 2)
   action      TEXT NOT NULL,      -- nudge|deny|halt
   mode        TEXT NOT NULL,      -- enforce|observe (observe = would-have)
+  reason      TEXT,               -- one line, redacted (migration 2)
   message     TEXT,
   outcome     TEXT                -- filled later: recovered|continued_loop|halted|unknown
 );
@@ -679,7 +695,8 @@ polling_families: ["sleep", "watch", "gh run watch", "gh pr checks", "git status
 polling_patterns: ['^kubectl\b.*\s(-w|--watch)\b', '^curl\b.*/health']
 read_only_commands: ["grep", "rg", "ag", "cat", "head", "tail", "less", "more", "find", "fd", "ls", "tree", "wc",
                      "git log", "git diff", "git show", "git status", "git blame", "git grep",
-                     "select-string", "get-content", "findstr", "type"]
+                     "select-string", "get-content", "findstr", "type",
+                     "docker logs", "kubectl logs", "aws logs", "journalctl", "curl", "wget", "echo", "printf"]
 error_marker_families: ["pytest", "jest", "vitest", "go test", "cargo test", "cargo build", "tsc",
                         "npm test", "yarn test", "pnpm test", "bun test", "npm run test", "yarn run test",
                         "pnpm run test", "bun run test", "npx jest", "npx vitest", "npx tsc",
@@ -802,14 +819,14 @@ type Notification struct { Kind, Title, Body, SessionKey, Repo string; Severity 
 |---|---|
 | normalize | Table tests per placeholder rule; same/different-error pairs on `testdata/outputs/` (go test, tsc, jest real; pytest, cargo hand-written) |
 | redact | One test per secret type; normal text (code references, "PASS", "KeyError") left alone |
-| adapters | Golden files: payload in `testdata/hooks/<agent>/<version>/*.json` → expected Event; Decision → expected stdout/exit |
+| adapters | Golden files: every payload under `testdata/hooks/<agent>/**` (hand-written ones in `synthetic/`, real exports in `<version>/`) → expected Event in the `.golden` next to it (`-update` rewrites them); an installed event must map to a phase; Decision → expected stdout/exit. Install/uninstall: merge, idempotence, in-place update, backups, refusal of invalid JSON, formatting kept |
 | detectors | Scripted sessions (YAML DSL in `testdata/sessions/`, runner in `internal/pipeline`) → expected signals and would-have decisions; a 60-call loop keeps one LoopKey; property tests: polling commands never fire |
 | policy | State machine transition tests, including cooldowns, family-only resets, and the observe-mode invariant (never an action other than `none`) |
 | replay | Synthetic transcripts (`internal/replay/replaytest`) covering every observed line shape → events, loops, report, labels, eval, export round trip; golden test on anonymized real sessions (`testdata/transcripts/`) |
 | shim | Daemon down, slow (timeout), and garbage-response cases all → exit 0, empty stdout |
 | e2e | Spin up the daemon, run real `claude -p` in a sandbox repo with a deliberately unfixable failing test (e.g. a test asserting a wrong constant from a read-only file), and assert a nudge appears in the transcript and the halt happens |
 | eval | `make eval` / `loopguard eval`: replay the labeled private corpus → precision, recall, detection delay per detector. Skipped without `LOOPGUARD_EVAL_DIR` (CI has no private data) |
-| perf | Benchmark: 10k calls through the full pipeline in < 1 s (`BenchmarkPipeline10kCalls`); replay throughput; shim round-trip p99 < 50 ms on CI hardware |
+| perf | Benchmark: 10k calls through the full pipeline in < 1 s (`BenchmarkPipeline10kCalls`); replay throughput; hook round trip (`TestHookLatency`, opt-in): p99 < 50 ms on macOS/Linux, within ~15 ms of the process-start floor on Windows (§10) |
 
 `make test` runs `go test -race` on Linux and macOS. On Windows it runs without `-race` (no C toolchain is assumed); `RACE=1` forces it.
 
@@ -893,4 +910,35 @@ Decisions made while building the store, the Claude Code adapter, the daemon, an
 23. **The shim starts `loopguard daemon` directly** with the detach flags (Windows: `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`, plus `CREATE_BREAKAWAY_FROM_JOB` when the agent's job object allows it, so a job that kills hook children on exit doesn't take the daemon with it; Unix: `setsid`), with its working directory set to the LoopGuard home so it doesn't hold the agent's project directory open. `loopguard daemon --detach` uses the same spawn and waits for `/healthz`.
 24. **Autostart rate limit**: the mtime of `<home>/autostart.lock` records the last attempt; two hooks racing past it may both spawn, and the daemon's single-instance check makes the extra one exit. `LOOPGUARD_NO_AUTOSTART=1` disables autostart (for tests, or a daemon run as a service).
 25. **Stdin over 4 MB** is read to the end (so the agent's write doesn't fail) and dropped. A reply with an exit code outside 0–255 is ignored. The shim never uses `HTTP(S)_PROXY`.
-26. **Latency** (Windows 11, 500 calls, see the M2-A report): p50 60 ms, p99 82 ms end to end, against a 50 ms target. The daemon's own part is ~0.5 ms; process start dominates, and about half of it is binary size (a hook-only build ran at p99 57 ms). Options: a separate small shim binary, or `type: "http"` hooks (§3.3).
+26. **Latency** (Windows 11, 500 calls, see the M2-A report): p50 60 ms, p99 82 ms end to end, against a 50 ms target. The daemon's own part is ~0.5 ms; process start dominates, and about half of it is binary size (a hook-only build ran at p99 57 ms). Options: a separate small shim binary, or `type: "http"` hooks (§3.3). M2-B did the former (decision 27).
+
+### M2-B
+
+Decisions made while building the hook binary, `init`/`uninstall`, `doctor`, `status`, and capture mode, plus the fixes from the M2-A review.
+
+**Hook binary**
+27. **`cmd/loopguard-hook`** is the shim alone (§10): 77 packages instead of 264, 2.4 MB instead of 13.4 MB. Measured on the Windows 11 development machine, 300 runs each: `net.Dial` + a hand-written request cost ~3 ms over an empty program, `net/http` ~5 ms, `encoding/json` ~1 ms, `crypto/rand` ~1.5 ms; so the shim avoids all three, and `TestMinimalDependencies` keeps it that way. Of what is left, `net`'s package init (Winsock start-up) is ~3 ms on Windows; a named-pipe transport would remove it, but isn't worth the complexity yet.
+28. **HTTP/1.0** for the shim's request: the daemon (net/http) answers without chunking and closes the connection, so the shim's reply parser is a few lines. Replies over 1 MB, chunked replies, and anything that isn't `HTTP/1.x 200` fail open.
+29. **`home/homedir`** holds the shim's view of the home (dir, file names, token, port) with only os/strings/strconv; `home` re-exports it. `proc` uses `syscall` instead of `golang.org/x/sys/windows` for the same reason.
+30. **Daemon executable**: `loopguard-hook` starts `loopguard daemon` from the `loopguard` executable in its own directory; `loopguard hook` starts itself. Both binaries must therefore live in the same directory.
+31. **Performance target** (§10): p99 < 50 ms on macOS/Linux; on Windows within ~15 ms of the process-start floor, which this machine measures at 25–45 ms p99 depending on load.
+
+**Commands (M2-A review)**
+32. **Read-only commands** also include `docker logs`, `kubectl logs`, `aws logs`, `journalctl`, `curl`, `wget`, `echo`, `printf` (§4.3).
+33. **Assignments are skipped in families** (§4.3): leading `NAME=value` words (the whitespace fallback kept them: `S="/tmp/x"; "py" -I - <<'EOF'` was the family `s="<tmp>";`) and PowerShell `$env:X=…`/`$x = …` statements. Quotes around a fallback command word are dropped. The replay golden changed accordingly (two bogus families gone).
+
+**Install** (§3.3)
+34. **Ownership by base name** (`loopguard-hook[.exe]`), not by a marker field: Claude Code may drop unknown fields when it rewrites settings, and a path survives.
+35. **Order-preserving merge**: the settings are edited as ordered JSON members with their original text, then re-indented with the file's own indentation and line endings, so a diff shows only LoopGuard's lines (plus re-wrapping of compact one-line objects, since the whole file is re-indented). Our hook objects are written as `type, command, args, timeout`.
+36. **One LoopGuard hook per event**: duplicates (e.g. after a copy-paste) are collapsed; a stale one is replaced at its position; ours are removed from events LoopGuard no longer hooks. Equality is semantic (decoded JSON), so key order alone never counts as a change.
+37. **`$CLAUDE_CONFIG_DIR`** is honored for the user settings path. `--project` uses the git root above the current directory (else the current directory). `--settings <file>` targets any file (used by tests, and for unusual setups).
+38. **`init` requires the hook binary to exist** at the path it installs, and prints where it wrote, the backup, and the exact undo command. Open Claude Code sessions need a restart to pick up the hooks.
+
+**Doctor and status**
+39. **Doctor starts the daemon** if it is down (the next hook would anyway) and sends a synthetic `Stop` event for session `loopguard-doctor` through the installed `loopguard-hook` with `LOOPGUARD_DEBUG=1` and `LOOPGUARD_NO_AUTOSTART=1`: success needs exit 0, empty stdout, **empty stderr** (so a silent fail-open can't pass), the daemon having recorded the event, and < 1 s. Doctor also warns about `disableAllHooks` in the user, project, and local settings files, and fails (exit 1) on any failed check.
+40. **Status** lists only active sessions (live actors), leaves out the doctor's session, and shows the last 10 would-have decisions from `GET /v1/decisions`; when the daemon is down it reads them from the database. Reasons are cut at the first line and 100 characters. Migration 2 adds `sessions.failures` and `interventions.ts/detector/reason` (§11); rows from M2-A read back with empty values.
+
+**Capture** (§18.21)
+41. **Flag file** `<home>/capture.on` (`loopguard capture on|off`), stat'ed at most every 2 s by the daemon (`capture.Switch`), so no restart; `LOOPGUARD_CAPTURE=1` still forces it on. `/healthz` reports the daemon's view; `status` and `doctor` show the flag file or the daemon's view.
+42. **Export** (`capture export`) redacts and de-homes again, then replaces names learned from the payloads: the username of any home directory path (and its words of ≥ 3 letters, e.g. first and last name) → `user`, the last element of each `cwd` (unless generic: `src`, `desktop`, ...) → `project`, matched as whole words, case-insensitively; emails → `<email>`. It writes the `.golden` for each payload (`claudecode.Golden`, the same mapping the test uses), and prints the replaced names so they can be checked. Default output: `testdata/hooks/claude-code/<claude --version>/` when run in the repo.
+43. **Golden test** walks `testdata/hooks/claude-code/**`, so exported captures are tested with no code change.

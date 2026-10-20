@@ -1,8 +1,13 @@
 # Capturing golden hook payloads
 
-The Claude Code adapter (milestone M2) is tested against real hook payloads stored in `testdata/hooks/claude-code/`. There are two ways to collect them:
+The Claude Code adapter (milestone M2) is tested against real hook payloads stored in `testdata/hooks/claude-code/`. The golden test loads every `*.json` below that directory (any depth), so exported captures are tested with no code change. There are two ways to collect them:
 
-- **With the daemon (simplest):** start it with `LOOPGUARD_CAPTURE=1` (for example `$env:LOOPGUARD_CAPTURE=1; loopguard daemon` in PowerShell, or `LOOPGUARD_CAPTURE=1 loopguard daemon`). Every hook payload it receives is saved, with secrets redacted and your home directory replaced by `<HOME>`, to `~/.loopguard/capture/<agent>/<event>-<n>.json`, at most 20 per event type. You still need to review them (step 3) before copying them into the repo: redaction catches known secret formats, not private prose or code.
+- **With LoopGuard installed (simplest):**
+  1. `loopguard capture on`. The daemon notices within 2 seconds; no restart. (`LOOPGUARD_CAPTURE=1` in the daemon's environment also still works.)
+  2. Use Claude Code normally (see step 2 below for what to try). Every hook payload is saved, with secrets redacted and your home directory replaced by `<HOME>`, to `~/.loopguard/capture/claude-code/<event>-<n>.json`, at most 20 per event type. `loopguard capture status` shows the counts.
+  3. `loopguard capture off`.
+  4. From the repo root: `loopguard capture export`. It writes the payloads to `testdata/hooks/claude-code/<claude --version>/` (or `--out <dir>`) after a final pass: secrets redacted again, usernames and project names learned from the paths replaced by `user` and `project`, email addresses replaced. It also writes the expected `.golden` file next to each payload and prints which names it replaced.
+  5. **Review the files** before committing: redaction catches known secret formats and the names above, not private prose or code in prompts, commands, or outputs. Delete or edit what you don't want to publish, then run `go test ./internal/adapter/claudecode -update` (if you edited payloads) and `go test ./internal/adapter/claudecode`.
 - **With a temporary capture hook,** described below. It doesn't need the `loopguard` binary.
 
 ## 1. Install the capture hook (temporarily)
