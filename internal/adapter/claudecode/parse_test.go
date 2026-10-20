@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,39 +17,32 @@ import (
 
 var update = flag.Bool("update", false, "rewrite the expected *.golden files")
 
-// goldenEvent is the part of an Event the golden files pin: everything the
-// adapter maps, nothing that varies per run (ID, ReceivedAt, Raw).
-type goldenEvent struct {
-	Agent      event.AgentKind `json:"agent"`
-	SessionID  string          `json:"session_id"`
-	AgentID    string          `json:"agent_id,omitempty"`
-	Phase      event.Phase     `json:"phase"`
-	ToolName   string          `json:"tool_name,omitempty"`
-	ToolUseID  string          `json:"tool_use_id,omitempty"`
-	Input      json.RawMessage `json:"input,omitempty"`
-	Output     json.RawMessage `json:"output,omitempty"`
-	IsError    bool            `json:"is_error,omitempty"`
-	Cwd        string          `json:"cwd,omitempty"`
-	Transcript string          `json:"transcript,omitempty"`
-	PermMode   string          `json:"perm_mode,omitempty"`
-	Prompt     string          `json:"prompt,omitempty"`
-	Model      string          `json:"model,omitempty"`
-	Source     string          `json:"source,omitempty"`
-}
-
 // TestGoldenPayloads parses every payload under testdata/hooks/claude-code
-// and compares the mapped Event with the .golden file next to it.
+// (any depth: synthetic/ and one directory per captured Claude Code
+// version) and compares the mapped Event with the .golden file next to it.
+// Run with -update to write the .golden files, then review the diff.
 func TestGoldenPayloads(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join("..", "..", "..", "testdata", "hooks", "claude-code", "*", "*.json"))
+	root := filepath.Join("..", "..", "..", "testdata", "hooks", "claude-code")
+	var files []string
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".json") {
+			files = append(files, p)
+		}
+		return err
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(files) == 0 {
 		t.Fatal("no golden payloads found")
 	}
+	installed := map[string]bool{}
+	for _, h := range Hooks {
+		installed[h.Event] = true
+	}
 	for _, f := range files {
-		name := filepath.Base(filepath.Dir(f)) + "/" + filepath.Base(f)
-		t.Run(name, func(t *testing.T) {
+		rel, _ := filepath.Rel(root, f)
+		t.Run(filepath.ToSlash(rel), func(t *testing.T) {
 			raw, err := os.ReadFile(f)
 			if err != nil {
 				t.Fatal(err)
@@ -60,17 +54,19 @@ func TestGoldenPayloads(t *testing.T) {
 			if ev.ID == "" || ev.ReceivedAt.IsZero() || !bytes.Equal(ev.Raw, raw) {
 				t.Errorf("ID %q, ReceivedAt %v, Raw kept %v", ev.ID, ev.ReceivedAt, bytes.Equal(ev.Raw, raw))
 			}
-			g := goldenEvent{
-				Agent: ev.Agent, SessionID: ev.SessionID, AgentID: ev.AgentID, Phase: ev.Phase,
-				ToolName: ev.ToolName, ToolUseID: ev.ToolUseID, Input: compact(t, ev.Input), Output: compact(t, ev.Output),
-				IsError: ev.IsError, Cwd: ev.Cwd, Transcript: ev.Transcript, PermMode: ev.PermMode,
-				Prompt: ev.Prompt, Model: ev.Model, Source: ev.Source,
+			// A real payload for an event LoopGuard hooks must map to a phase:
+			// an empty one means Claude Code renamed or reshaped it.
+			var name struct {
+				Event string `json:"hook_event_name"`
 			}
-			got, err := json.MarshalIndent(g, "", "  ")
+			_ = json.Unmarshal(raw, &name)
+			if installed[name.Event] && ev.Phase == "" {
+				t.Errorf("%s parsed to no phase", name.Event)
+			}
+			got, err := Golden(raw)
 			if err != nil {
 				t.Fatal(err)
 			}
-			got = append(got, '\n')
 			golden := strings.TrimSuffix(f, ".json") + ".golden"
 			if *update {
 				if err := os.WriteFile(golden, got, 0o644); err != nil {
@@ -87,17 +83,6 @@ func TestGoldenPayloads(t *testing.T) {
 			}
 		})
 	}
-}
-
-func compact(t *testing.T, v json.RawMessage) json.RawMessage {
-	if v == nil {
-		return nil
-	}
-	var b bytes.Buffer
-	if err := json.Compact(&b, v); err != nil {
-		t.Fatal(err)
-	}
-	return b.Bytes()
 }
 
 func TestParseErrors(t *testing.T) {
