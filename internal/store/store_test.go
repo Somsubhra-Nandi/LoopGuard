@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -69,7 +70,7 @@ func TestWriterRoundTrip(t *testing.T) {
 
 	key := "claude-code:abc"
 	w.Enqueue(Session{Key: key, Agent: "claude-code", SessionID: "abc", Cwd: `C:\repo`, StartedAt: t0, LastSeenAt: t0, ToolCalls: 1})
-	w.Enqueue(Session{Key: key, Agent: "claude-code", SessionID: "abc", Model: "opus", StartedAt: t0, LastSeenAt: t0.Add(time.Minute), ToolCalls: 2, LoopsDetected: 1})
+	w.Enqueue(Session{Key: key, Agent: "claude-code", SessionID: "abc", Model: "opus", StartedAt: t0, LastSeenAt: t0.Add(time.Minute), ToolCalls: 2, Failures: 1, LoopsDetected: 1})
 	big := uint64(1<<63 + 12345) // high bit set: stored as a negative int64
 	call := Call{SessionKey: key, Seq: 3, TS: t0, Tool: "bash", Family: "go test", ActionFP: big, ResultFP: 7,
 		IsError: true, ErrExact: big - 1, ErrSim: 9, ErrLines: []string{"--- FAIL: TestX"}, InputDigest: "go test ./...",
@@ -77,7 +78,9 @@ func TestWriterRoundTrip(t *testing.T) {
 	w.Enqueue(call)
 	w.Enqueue(Signal{SessionKey: key, Seq: 3, Detector: "repeated_failure", LoopKey: "rf:go test:1", Severity: 0.6, Count: 4,
 		Evidence: json.RawMessage(`{"family":"go test"}`)})
-	w.Enqueue(Intervention{SessionKey: key, Seq: 3, LoopKey: "rf:go test:1", Action: "nudge", Mode: ModeObserve})
+	iv := Intervention{SessionKey: key, Seq: 3, TS: t0, LoopKey: "rf:go test:1", Detector: "repeated_failure", Action: "nudge",
+		Mode: ModeObserve, Reason: "go test failed 4 times with the same error", Message: "msg"}
+	w.Enqueue(iv)
 	w.Flush()
 
 	sess, err := s.GetSession(ctx, "abc")
@@ -85,7 +88,7 @@ func TestWriterRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The later row wins, but a missing model or cwd doesn't erase one.
-	if sess.Key != key || sess.ToolCalls != 2 || sess.LoopsDetected != 1 || sess.Model != "opus" || sess.Cwd != `C:\repo` ||
+	if sess.Key != key || sess.ToolCalls != 2 || sess.Failures != 1 || sess.LoopsDetected != 1 || sess.Model != "opus" || sess.Cwd != `C:\repo` ||
 		!sess.StartedAt.Equal(t0) || !sess.LastSeenAt.Equal(t0.Add(time.Minute)) || !sess.EndedAt.IsZero() {
 		t.Errorf("session = %+v", sess)
 	}
@@ -108,8 +111,12 @@ func TestWriterRoundTrip(t *testing.T) {
 		t.Errorf("Signals = %+v, %v", sigs, err)
 	}
 	ivs, err := s.Interventions(ctx, key, 10)
-	if err != nil || len(ivs) != 1 || ivs[0].Action != "nudge" || ivs[0].Mode != ModeObserve {
-		t.Errorf("Interventions = %+v, %v", ivs, err)
+	iv.ID = 1
+	if err != nil || len(ivs) != 1 || !reflect.DeepEqual(ivs[0], iv) {
+		t.Errorf("Interventions = %+v, %v; want %+v", ivs, err, iv)
+	}
+	if recent, err := s.RecentInterventions(ctx, 5); err != nil || len(recent) != 1 || !reflect.DeepEqual(recent[0], iv) {
+		t.Errorf("RecentInterventions = %+v, %v", recent, err)
 	}
 	if seq, err := s.MaxSeq(ctx, key); err != nil || seq != 3 {
 		t.Errorf("MaxSeq = %d, %v; want 3", seq, err)
@@ -218,5 +225,48 @@ func TestNilWriter(t *testing.T) {
 	w.Close()
 	if a, b, c := w.Stats(); a+b+c != 0 {
 		t.Error("nil writer has stats")
+	}
+}
+
+// TestMigrateFromV1 opens a database created by the first schema version
+// (an M2-A install) and checks that its rows survive the upgrade.
+func TestMigrateFromV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v1 db", "loopguard.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, stmt := range []string{
+		`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER)`,
+		migrations[0],
+		`INSERT INTO schema_migrations VALUES (1, 0)`,
+		`INSERT INTO sessions (key, agent, session_id, started_at, last_seen_at, tool_calls) VALUES ('claude-code:old', 'claude-code', 'old', 1, 2, 5)`,
+		`INSERT INTO interventions (session_key, seq, loop_key, action, mode) VALUES ('claude-code:old', 4, 'rf:x', 'nudge', 'observe')`,
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if v, _ := s.SchemaVersion(ctx); v != len(migrations) {
+		t.Errorf("version %d after upgrade", v)
+	}
+	sess, err := s.GetSession(ctx, "old")
+	if err != nil || sess.ToolCalls != 5 || sess.Failures != 0 {
+		t.Errorf("old session = %+v, %v", sess, err)
+	}
+	ivs, err := s.RecentInterventions(ctx, 10)
+	if err != nil || len(ivs) != 1 || ivs[0].Action != "nudge" || !ivs[0].TS.IsZero() || ivs[0].Detector != "" {
+		t.Errorf("old interventions = %+v, %v", ivs, err)
 	}
 }

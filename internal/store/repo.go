@@ -21,6 +21,7 @@ type Session struct {
 	LastSeenAt    time.Time `json:"last_seen_at"`
 	EndedAt       time.Time `json:"ended_at,omitzero"`
 	ToolCalls     int64     `json:"tool_calls"`
+	Failures      int64     `json:"failures"`
 	LoopsDetected int64     `json:"loops_detected"`
 	WastedMS      int64     `json:"wasted_ms"`
 }
@@ -61,14 +62,17 @@ type Signal struct {
 // Intervention is a row of the interventions table. In observe mode it
 // records what enforce mode would have done (Mode "observe").
 type Intervention struct {
-	ID         int64  `json:"id"`
-	SessionKey string `json:"-"`
-	Seq        uint64 `json:"seq"`
-	LoopKey    string `json:"loop_key"`
-	Action     string `json:"action"`
-	Mode       string `json:"mode"`
-	Message    string `json:"message,omitempty"`
-	Outcome    string `json:"outcome,omitempty"`
+	ID         int64     `json:"id"`
+	SessionKey string    `json:"session_key,omitempty"`
+	Seq        uint64    `json:"seq"`
+	TS         time.Time `json:"ts,omitzero"`
+	LoopKey    string    `json:"loop_key"`
+	Detector   string    `json:"detector,omitempty"`
+	Action     string    `json:"action"`
+	Mode       string    `json:"mode"`
+	Reason     string    `json:"reason,omitempty"` // why, in one line
+	Message    string    `json:"message,omitempty"`
+	Outcome    string    `json:"outcome,omitempty"`
 }
 
 // Intervention modes.
@@ -81,13 +85,14 @@ const (
 var ErrNotFound = errors.New("not found")
 
 const sessionCols = `key, agent, session_id, COALESCE(repo, ''), COALESCE(cwd, ''), COALESCE(transcript, ''),
-COALESCE(model, ''), started_at, last_seen_at, COALESCE(ended_at, 0), tool_calls, loops_detected, wasted_ms`
+COALESCE(model, ''), started_at, last_seen_at, COALESCE(ended_at, 0), tool_calls, COALESCE(failures, 0),
+loops_detected, wasted_ms`
 
 func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var s Session
 	var started, last, ended int64
 	err := sc.Scan(&s.Key, &s.Agent, &s.SessionID, &s.Repo, &s.Cwd, &s.Transcript, &s.Model,
-		&started, &last, &ended, &s.ToolCalls, &s.LoopsDetected, &s.WastedMS)
+		&started, &last, &ended, &s.ToolCalls, &s.Failures, &s.LoopsDetected, &s.WastedMS)
 	s.StartedAt, s.LastSeenAt, s.EndedAt = fromMS(started), fromMS(last), fromMS(ended)
 	return s, err
 }
@@ -207,24 +212,37 @@ FROM signals WHERE session_key = ? ORDER BY id DESC LIMIT ?) ORDER BY id`, key, 
 	return out, rows.Err()
 }
 
+const interventionCols = `id, session_key, seq, COALESCE(ts, 0), loop_key, COALESCE(detector, ''), action, mode,
+COALESCE(reason, ''), COALESCE(message, ''), COALESCE(outcome, '')`
+
 // Interventions returns the newest limit interventions of a session,
 // oldest first.
 func (s *Store) Interventions(ctx context.Context, key string, limit int) ([]Intervention, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT * FROM (
-SELECT id, seq, loop_key, action, mode, COALESCE(message, ''), COALESCE(outcome, '')
+	return s.interventions(ctx, `SELECT * FROM (SELECT `+interventionCols+`
 FROM interventions WHERE session_key = ? ORDER BY id DESC LIMIT ?) ORDER BY id`, key, limit)
+}
+
+// RecentInterventions returns the newest limit interventions of all
+// sessions, newest first.
+func (s *Store) RecentInterventions(ctx context.Context, limit int) ([]Intervention, error) {
+	return s.interventions(ctx, `SELECT `+interventionCols+` FROM interventions ORDER BY id DESC LIMIT ?`, limit)
+}
+
+func (s *Store) interventions(ctx context.Context, q string, args ...any) ([]Intervention, error) {
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Intervention{}
 	for rows.Next() {
-		iv := Intervention{SessionKey: key}
-		var seq int64
-		if err := rows.Scan(&iv.ID, &seq, &iv.LoopKey, &iv.Action, &iv.Mode, &iv.Message, &iv.Outcome); err != nil {
+		var iv Intervention
+		var seq, ts int64
+		if err := rows.Scan(&iv.ID, &iv.SessionKey, &seq, &ts, &iv.LoopKey, &iv.Detector, &iv.Action, &iv.Mode,
+			&iv.Reason, &iv.Message, &iv.Outcome); err != nil {
 			return nil, err
 		}
-		iv.Seq = uint64(seq)
+		iv.Seq, iv.TS = uint64(seq), fromMS(ts)
 		out = append(out, iv)
 	}
 	return out, rows.Err()
@@ -234,8 +252,8 @@ FROM interventions WHERE session_key = ? ORDER BY id DESC LIMIT ?) ORDER BY id`,
 
 const (
 	upsertSession = `INSERT INTO sessions (key, agent, session_id, repo, cwd, transcript, model,
-  started_at, last_seen_at, ended_at, tool_calls, loops_detected, wasted_ms)
-VALUES (?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, NULLIF(?, 0), ?, ?, ?)
+  started_at, last_seen_at, ended_at, tool_calls, failures, loops_detected, wasted_ms)
+VALUES (?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, NULLIF(?, 0), ?, ?, ?, ?)
 ON CONFLICT(key) DO UPDATE SET
   repo = COALESCE(excluded.repo, repo),
   cwd = COALESCE(excluded.cwd, cwd),
@@ -245,6 +263,7 @@ ON CONFLICT(key) DO UPDATE SET
   last_seen_at = MAX(last_seen_at, excluded.last_seen_at),
   ended_at = excluded.ended_at,
   tool_calls = excluded.tool_calls,
+  failures = excluded.failures,
   loops_detected = excluded.loops_detected,
   wasted_ms = excluded.wasted_ms`
 	insertCall = `INSERT INTO calls (session_key, seq, ts, tool, family, file_path, action_fp, result_fp, is_error,
@@ -253,13 +272,13 @@ VALUES (?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, NULLIF(?, ''), 
 ON CONFLICT DO NOTHING`
 	insertSignal = `INSERT INTO signals (session_key, seq, detector, loop_key, severity, count, evidence)
 VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''))`
-	insertIntervention = `INSERT INTO interventions (session_key, seq, loop_key, action, mode, message, outcome)
-VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''))`
+	insertIntervention = `INSERT INTO interventions (session_key, seq, ts, loop_key, detector, action, mode, reason, message, outcome)
+VALUES (?, ?, NULLIF(?, 0), ?, NULLIF(?, ''), ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''))`
 )
 
 func (r Session) write(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, upsertSession, r.Key, r.Agent, r.SessionID, r.Repo, r.Cwd, r.Transcript, r.Model,
-		ms(r.StartedAt), ms(r.LastSeenAt), ms(r.EndedAt), r.ToolCalls, r.LoopsDetected, r.WastedMS)
+		ms(r.StartedAt), ms(r.LastSeenAt), ms(r.EndedAt), r.ToolCalls, r.Failures, r.LoopsDetected, r.WastedMS)
 	return err
 }
 
@@ -282,7 +301,7 @@ func (r Signal) write(ctx context.Context, tx *sql.Tx) error {
 }
 
 func (r Intervention) write(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, insertIntervention, r.SessionKey, i64(r.Seq), r.LoopKey, r.Action, r.Mode,
-		r.Message, r.Outcome)
+	_, err := tx.ExecContext(ctx, insertIntervention, r.SessionKey, i64(r.Seq), ms(r.TS), r.LoopKey, r.Detector, r.Action,
+		r.Mode, r.Reason, r.Message, r.Outcome)
 	return err
 }

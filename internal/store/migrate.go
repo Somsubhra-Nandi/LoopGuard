@@ -88,6 +88,14 @@ CREATE TABLE usage (
 
 CREATE TABLE transcript_offsets (path TEXT PRIMARY KEY, offset INTEGER NOT NULL, inode INTEGER);
 `,
+	// 2: failure counts per session, and when and why for each intervention
+	// (`loopguard status`).
+	`
+ALTER TABLE sessions ADD COLUMN failures INTEGER DEFAULT 0;
+ALTER TABLE interventions ADD COLUMN ts INTEGER;
+ALTER TABLE interventions ADD COLUMN detector TEXT;
+ALTER TABLE interventions ADD COLUMN reason TEXT;
+`,
 }
 
 // migrate creates schema_migrations if needed and applies the migrations
@@ -129,3 +137,6 @@ func apply(ctx context.Context, db *sql.DB, version int, ddl string) error {
 	}
 	return tx.Commit()
 }
+
+// SchemaLatest is the schema version Open migrates to.
+var SchemaLatest = len(migrations)
