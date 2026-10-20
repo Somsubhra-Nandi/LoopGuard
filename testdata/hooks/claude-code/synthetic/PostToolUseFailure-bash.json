@@ -1,0 +1,12 @@
+{
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/11111111-2222-3333-4444-555555555555.jsonl",
+  "cwd": "/home/user/project",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Bash",
+  "tool_input": {"command": "npm test"},
+  "tool_use_id": "toolu_02",
+  "error": "Exit code 1\nFAIL src/cart.test.ts\n  ● total › adds tax\n    Expected: 110\n    Received: 100",
+  "is_interrupt": false
+}

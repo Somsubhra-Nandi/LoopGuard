@@ -1,0 +1,6 @@
+{
+  "agent": "claude-code",
+  "session_id": "s-lenient",
+  "phase": "session_start",
+  "model": "claude-sonnet-5-5"
+}

@@ -1,0 +1,10 @@
+{
+  "agent": "claude-code",
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "phase": "session_start",
+  "cwd": "/home/user/project",
+  "transcript": "/home/user/.claude/projects/-home-user-project/11111111-2222-3333-4444-555555555555.jsonl",
+  "perm_mode": "default",
+  "model": "claude-opus-5-5",
+  "source": "startup"
+}

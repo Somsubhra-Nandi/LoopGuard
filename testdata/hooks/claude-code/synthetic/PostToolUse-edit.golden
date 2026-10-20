@@ -1,0 +1,23 @@
+{
+  "agent": "claude-code",
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "phase": "post",
+  "tool_name": "edit",
+  "tool_use_id": "toolu_03",
+  "input": {
+    "file_path": "/home/user/project/src/cart.ts",
+    "edits": [
+      {
+        "old_string": "a",
+        "new_string": "b"
+      }
+    ]
+  },
+  "output": {
+    "filePath": "/home/user/project/src/cart.ts",
+    "success": true
+  },
+  "cwd": "/home/user/project",
+  "transcript": "/home/user/.claude/projects/-home-user-project/11111111-2222-3333-4444-555555555555.jsonl",
+  "perm_mode": "default"
+}

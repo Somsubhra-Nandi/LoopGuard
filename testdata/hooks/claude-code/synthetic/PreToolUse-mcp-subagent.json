@@ -1,0 +1,12 @@
+{
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/11111111-2222-3333-4444-555555555555.jsonl",
+  "cwd": "/home/user/project",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "agent_id": "agent-7",
+  "agent_type": "Explore",
+  "tool_name": "mcp__github__create_issue",
+  "tool_input": {"title": "x"},
+  "tool_use_id": "toolu_04"
+}

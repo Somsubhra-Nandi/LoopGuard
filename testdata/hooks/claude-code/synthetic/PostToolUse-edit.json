@@ -1,0 +1,11 @@
+{
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/11111111-2222-3333-4444-555555555555.jsonl",
+  "cwd": "/home/user/project",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "MultiEdit",
+  "tool_input": {"file_path": "/home/user/project/src/cart.ts", "edits": [{"old_string": "a", "new_string": "b"}]},
+  "tool_response": {"filePath": "/home/user/project/src/cart.ts", "success": true},
+  "tool_use_id": "toolu_03"
+}

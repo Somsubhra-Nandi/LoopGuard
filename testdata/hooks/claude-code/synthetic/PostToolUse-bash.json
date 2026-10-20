@@ -1,0 +1,11 @@
+{
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/11111111-2222-3333-4444-555555555555.jsonl",
+  "cwd": "/home/user/project",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {"command": "npm test", "description": "Run the tests"},
+  "tool_response": {"stdout": "Tests: 6 passed, 6 total", "stderr": "", "interrupted": false, "isImage": false},
+  "tool_use_id": "toolu_01"
+}
