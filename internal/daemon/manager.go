@@ -68,8 +68,11 @@ type Manager struct {
 
 	mu     sync.Mutex
 	actors map[string]*actor
-	closed bool
-	wg     sync.WaitGroup
+	// retired holds, per session key, the done channel of the evicted
+	// actor, so its successor starts only after the old one's rows are in.
+	retired map[string]chan struct{}
+	closed  bool
+	wg      sync.WaitGroup
 }
 
 func newManager(cfg *config.Loader, st *store.Store, w *store.Writer, log *slog.Logger, met *metrics, idle time.Duration) *Manager {
@@ -77,7 +80,7 @@ func newManager(cfg *config.Loader, st *store.Store, w *store.Writer, log *slog.
 		idle = DefaultIdle
 	}
 	return &Manager{cfg: cfg, pauses: &pauses{}, st: st, w: w, log: log, met: met, idle: idle, clock: time.Now,
-		pipes: map[uint64]*pipeline.Pipeline{}, actors: map[string]*actor{}}
+		pipes: map[uint64]*pipeline.Pipeline{}, actors: map[string]*actor{}, retired: map[string]chan struct{}{}}
 }
 
 // pipeFor returns the pipeline for a configuration. Pipelines hold no
@@ -126,6 +129,8 @@ func (m *Manager) Submit(ev *event.Event, ad adapter.Adapter) <-chan reply {
 	a := m.actors[key]
 	if a == nil {
 		a = m.newActor(key, ev)
+		a.prev = m.retired[key]
+		delete(m.retired, key)
 		m.actors[key] = a
 		m.wg.Add(1)
 		go a.run()
@@ -184,6 +189,7 @@ func (m *Manager) evictIdle() {
 		if now.Sub(a.lastActive()) > m.idle && len(a.in) == 0 {
 			close(a.in)
 			delete(m.actors, key)
+			m.retired[key] = a.done
 			m.log.Debug("session evicted", "session", key)
 		}
 	}
@@ -225,7 +231,9 @@ type actor struct {
 	m        *Manager
 	key      string
 	in       chan job
-	last     atomic.Int64 // unix nanos of the last submitted event
+	done     chan struct{}   // closed when run returns, after the actor's last rows are queued
+	prev     <-chan struct{} // the evicted predecessor's done, or nil
+	last     atomic.Int64    // unix nanos of the last submitted event
 	state    *session.SessionState
 	outcomes *policy.Outcomes
 
@@ -241,6 +249,7 @@ func (m *Manager) newActor(key string, ev *event.Event) *actor {
 		m:     m,
 		key:   key,
 		in:    make(chan job, actorQueue),
+		done:  make(chan struct{}),
 		loops: map[string]bool{},
 		repos: map[string]string{},
 	}
@@ -264,6 +273,7 @@ func (a *actor) summary() liveSummary {
 
 func (a *actor) run() {
 	defer a.m.wg.Done()
+	defer close(a.done)
 	a.resume()
 	for j := range a.in {
 		a.handle(j)
@@ -291,8 +301,19 @@ func (a *actor) resume() {
 	if a.m.st == nil {
 		return
 	}
-	// A previous actor for this session was evicted after hours idle, so
-	// none of its rows are still queued in the writer.
+	// The numbering continues after the stored rows, so an evicted
+	// predecessor must have queued its last rows, and they must be written,
+	// before MaxSeq is read; otherwise new calls would reuse its seqs and be
+	// dropped as duplicates. After hours idle it has long finished; the wait
+	// matters when an event arrives right after the eviction.
+	if a.prev != nil {
+		select {
+		case <-a.prev:
+		case <-time.After(2 * time.Second):
+			a.m.log.Warn("resuming session: the evicted actor is still running", "session", a.key)
+		}
+		a.m.w.Flush()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if seq, err := a.m.st.MaxSeq(ctx, a.key); err == nil {
