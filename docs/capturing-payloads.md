@@ -1,6 +1,9 @@
 # Capturing golden hook payloads
 
-The Claude Code adapter (milestone M2) is tested against real hook payloads stored in `testdata/hooks/claude-code/`. This page explains how to collect them with a temporary capture hook. It doesn't need the `loopguard` binary.
+The Claude Code adapter (milestone M2) is tested against real hook payloads stored in `testdata/hooks/claude-code/`. There are two ways to collect them:
+
+- **With the daemon (simplest):** start it with `LOOPGUARD_CAPTURE=1` (for example `$env:LOOPGUARD_CAPTURE=1; loopguard daemon` in PowerShell, or `LOOPGUARD_CAPTURE=1 loopguard daemon`). Every hook payload it receives is saved, with secrets redacted and your home directory replaced by `<HOME>`, to `~/.loopguard/capture/<agent>/<event>-<n>.json`, at most 20 per event type. You still need to review them (step 3) before copying them into the repo: redaction catches known secret formats, not private prose or code.
+- **With a temporary capture hook,** described below. It doesn't need the `loopguard` binary.
 
 ## 1. Install the capture hook (temporarily)
 

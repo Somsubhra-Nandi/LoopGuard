@@ -258,7 +258,7 @@ For bash: parse the AST and take the first "real" command of each pipeline (the 
 
 ### 4.4 Error signature
 
-Input: the tail (last 8 KB of the normalized output) of a failed call, or of a **soft failure**: a **bash** call that exited 0 but whose output contains a failure marker (`FAILED`, `Error:`, `Traceback`, `panic:`, `npm ERR!`, `error[E`, `✕`, `AssertionError`). Soft failures apply only to bash, and never to read-only commands (§4.3): `grep -rn "Error:" src` or reading a log is not a failure.
+Input: the tail (last 8 KB of the normalized output) of a failed call, or of a **soft failure**: a **bash** call that exited 0 but whose output has a failure marker (`FAILED`, `Error:`, `Traceback`, `panic:`, `npm ERR!`, `error[E`, `✕`, `AssertionError`) **at the start of a line** (after optional whitespace). `Error:` counts only for test and build runner families (`pytest`, `jest`, `vitest`, `go test`, `cargo test|build`, `tsc`, `npm|yarn|pnpm|bun test`, `mvn`, `gradle`, `make`, `dotnet test`, and their `npx`/`run`/wrapper variants; configurable as `error_marker_families`): other programs print `Error:` lines as ordinary output, and `KeyError: 'x'` is not a failure marker at all. Soft failures apply only to bash, and never to read-only commands (§4.3): `grep -rn "Error:" src` or reading a log is not a failure.
 
 1. Normalize (§4.1).
 2. **Mask source locations**, per line: `file.ext:12:5` → `file.ext:<LN>`, `file.ext(12,5)` → `file.ext(<LN>)`, `line 12` → `line <LN>`, and code-frame gutters `> 12 |` → `> <LN> |`. An edit that shifts the failing line must not change the error. The **file names stay**.
@@ -399,6 +399,7 @@ All detectors look only at calls since the later of: the last human prompt (`Tur
 - **Fires when:** ≥ **25** consecutive calls have `Progress.Recent(25) < 0.5` and at least **8** of them are failures or re-reads.
 - **LoopKey:** `st:<TurnSeq>`
 - **Severity:** 0.5. It's lower-confidence, so it nudges once and notifies the human if `notify_on_stall` is set; no deny.
+- **Exploration is progress** (TODO(M3), from the M1-C review): reads of files not seen before in the session, fetches of URLs not fetched before, and searches with a new pattern must count as progress for the stall detector. Otherwise research sessions look stalled: on real data, research sessions produced 45 false "no progress" stretches in the replay near-miss report. Repeats of the same read, fetch, or search still don't count.
 
 ### D6. Budget
 - Inputs: `Usage` (from the cost accountant), wall time, and tool-call count.
@@ -540,6 +541,7 @@ type job struct { ev *event.Event; reply chan event.Decision }
 | `POST /v1/sessions/{id}/pause` / `resume` | Pause enforcement for a session |
 | `GET /v1/stats?range=7d` | Loops caught, time and cost saved estimates |
 | `GET /healthz`, `GET /metrics` | Health and Prometheus metrics |
+| `POST /v1/shutdown` | Stop the daemon (`loopguard daemon stop`) |
 
 The adapter renders on the daemon side so the shim stays dumb. Only the shim has to be backward-compatible across versions.
 
@@ -678,6 +680,10 @@ polling_patterns: ['^kubectl\b.*\s(-w|--watch)\b', '^curl\b.*/health']
 read_only_commands: ["grep", "rg", "ag", "cat", "head", "tail", "less", "more", "find", "fd", "ls", "tree", "wc",
                      "git log", "git diff", "git show", "git status", "git blame", "git grep",
                      "select-string", "get-content", "findstr", "type"]
+error_marker_families: ["pytest", "jest", "vitest", "go test", "cargo test", "cargo build", "tsc",
+                        "npm test", "yarn test", "pnpm test", "bun test", "npm run test", "yarn run test",
+                        "pnpm run test", "bun run test", "npx jest", "npx vitest", "npx tsc",
+                        "mvn", "mvnw", "gradle", "gradlew", "make", "dotnet test"]
 budgets:
   session: { soft_usd: 5, hard_usd: 15, wall_minutes: 180 }
   daily:   { soft_usd: 20, hard_usd: 50 }
@@ -752,7 +758,7 @@ The transcript format is described in [transcript-format.md](./transcript-format
   - Stall: the longest no-progress stretch.
 
   Each entry shows count vs threshold, a closeness in 0..1, and why it didn't fire: below the threshold, family progress, outside the window, polling, reads left to D4, or "stall arrives in M3". It also shows redacted evidence. Stretches that overlap a loop the same detector reported are dropped.
-- `--soft-failures` lists the calls counted as soft failures (bash, exit 0, failure marker): family, command, the markers found, and the redacted line with the first one. It also counts calls per marker, so noisy markers stand out. Markers are plain substrings, so `KeyError:` contains `Error:`.
+- `--soft-failures` lists the calls counted as soft failures (bash, exit 0, failure marker): family, command, the markers found, and the redacted line with the first one. It also counts calls per marker, so noisy markers stand out. Markers count only at the start of a line, and `Error:` only for test and build runners (§4.4).
 
 **Labels and eval**
 - `--label` asks `[y] real loop / [n] false positive / [s] skip / [q] quit` for each detected loop without a label, and appends to `~/.loopguard/labels.jsonl` (`$LOOPGUARD_HOME` overrides the directory).
@@ -848,3 +854,43 @@ Decisions made while building the detection core that the first draft of this do
 **Structure**
 23. **`internal/pipeline`** (§1): one `Handle(session, event, fileHashAfter)` path for replay and the daemon, so offline and live detection behave the same. Detectors are pure (no I/O, no clock); the file content hash comes in with the event.
 24. **All thresholds in `config.Thresholds`** (§12), including the ones the first draft only gave in prose.
+
+## 18. Design decisions from M2-A
+
+Decisions made while building the store, the Claude Code adapter, the daemon, and the shim that the sections above didn't specify.
+
+**Soft failures (M1-C review)**
+1. **Markers count only at a line start** (after optional whitespace), and **`Error:` only for test/build runner families** (`error_marker_families`, §4.4, §12). On the private corpus this took soft failures from 48 to 22 calls (`Error:` 34 → 0).
+
+**Store**
+2. **Transactions are `BEGIN IMMEDIATE`** (`_txlock=immediate`), so two processes opening a new database don't fail on a read-to-write lock upgrade while migrating.
+3. **Fingerprints are stored bit-for-bit** as signed 64-bit integers (`int64(uint64)`); high-bit values read back unchanged.
+4. **Duplicate calls are skipped** (`ON CONFLICT DO NOTHING`), and a failing row is counted and skipped without failing its batch. The writer drops rows when its queue (4,096) is full, never blocking; drops show in `/metrics`.
+5. **Session rows carry absolute counters**, upserted on every event; `COALESCE` keeps fields an event doesn't carry (model, cwd).
+6. Retention (§11) is not implemented yet.
+
+**Adapter**
+7. **Lenient parsing**: a field of the wrong type is treated as missing, not as a parse error. Only a non-object payload, or one without `hook_event_name` or `session_id`, fails. Unknown events parse with an empty phase and are ignored (counted as `event="unknown"`).
+8. **`PostToolUseFailure` output** is the `error` field (falling back to `tool_response`). **`SessionStart.model`** may be a string or an object (`id`, else `display_name`). New `Event` fields: `Model`, `Source`.
+9. **Render ignores actions that don't fit the phase** (deny on a post, nudge on a pre, halt on stop/prompt → no output), so a policy bug can't produce output Claude Code would misread. `additionalContext` and reasons are clipped at 9,000 bytes as a backstop.
+10. **Golden payloads** under `testdata/hooks/claude-code/synthetic/` are hand-written from the hooks reference until real ones are captured (`LOOPGUARD_CAPTURE=1`).
+
+**Daemon**
+11. **Session key**: `agent:session_id`, or `agent:session_id/agent_id` for a subagent, like replay's streams: interleaved subagent calls would confuse the detectors.
+12. **Single instance** is decided by `/healthz`: a daemon counts as running only if it answers with the same `home_id` (a hash of the home path). A pid in `daemon.json` alone isn't trusted (pids get reused); a port taken by something else, or by a daemon for another home, moves on to the next port.
+13. **Time budget**: the shim sends its timeout in `X-LoopGuard-Timeout-Ms`; the daemon answers within it minus 50 ms. A late event is still processed, in order; only its decision is dropped.
+14. **Every `/v1/events` failure is a 200 with an empty decision**, so the shim never has to distinguish errors.
+15. **Observe-only is enforced twice**: the policy only returns `none`, and the daemon also forces `Action = none` and `Notify = false` before rendering (TODO(M3)).
+16. **Eviction and resume**: actors are evicted after 2 h idle. A new actor for a known session continues the seq numbering (`MAX(seq)` from the store) and the counters, but **detector state starts empty**: there is no state snapshot. A panicking actor resets its state the same way.
+17. **`loops_detected`** counts distinct loop keys that reached the nudge threshold, as replay does (weaker ones are "below threshold").
+18. **File hash after edit/write** (§4.5) is read from disk only for files inside the session's `cwd`, ≤ 2 MB, without a NUL byte in the first 8 KB.
+19. **Extra routes**: `POST /v1/shutdown` (used by `loopguard daemon stop`). `/metrics` needs the token like everything but `/healthz`. Metric names are prefixed `loopguard_`, plus `loopguard_errors_total{kind}` and `loopguard_store_rows_total{outcome}`.
+20. **Logs**: JSON lines in `<home>/logs/daemon.log`, rotated at 5 MB, two backups. The foreground daemon also logs to stderr. `LOOPGUARD_DEBUG=1` enables debug logs.
+21. **Capture mode** (`LOOPGUARD_CAPTURE=1`): every string in the payload (keys too) is redacted, and the user's home directory is replaced with `<HOME>` in its native, slash-flipped, and Claude-project-dir (`C--Users-name`) spellings. Payloads that aren't JSON are skipped. Files are named `<event>-<n>.json`, at most 20 per event type across restarts.
+22. **Token file**: mode 0600 on Unix; on Windows a protected DACL with one entry for the current user, set before the token is written.
+
+**Shim**
+23. **The shim starts `loopguard daemon` directly** with the detach flags (Windows: `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`, plus `CREATE_BREAKAWAY_FROM_JOB` when the agent's job object allows it, so a job that kills hook children on exit doesn't take the daemon with it; Unix: `setsid`), with its working directory set to the LoopGuard home so it doesn't hold the agent's project directory open. `loopguard daemon --detach` uses the same spawn and waits for `/healthz`.
+24. **Autostart rate limit**: the mtime of `<home>/autostart.lock` records the last attempt; two hooks racing past it may both spawn, and the daemon's single-instance check makes the extra one exit. `LOOPGUARD_NO_AUTOSTART=1` disables autostart (for tests, or a daemon run as a service).
+25. **Stdin over 4 MB** is read to the end (so the agent's write doesn't fail) and dropped. A reply with an exit code outside 0–255 is ignored. The shim never uses `HTTP(S)_PROXY`.
+26. **Latency** (Windows 11, 500 calls, see the M2-A report): p50 60 ms, p99 82 ms end to end, against a 50 ms target. The daemon's own part is ~0.5 ms; process start dominates, and about half of it is binary size (a hook-only build ran at p99 57 ms). Options: a separate small shim binary, or `type: "http"` hooks (§3.3).
