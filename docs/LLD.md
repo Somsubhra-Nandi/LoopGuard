@@ -27,6 +27,7 @@ loopguard/
 │   ├── shim/                       # loopguard-hook and `loopguard hook`: stdin → daemon → stdout/exit, auto-start daemon
 │   ├── daemon/                     # http server, auth, session manager, actors, lifecycle
 │   ├── capture/                    # capture mode (flag file), payload capture, anonymized export for golden tests
+│   ├── anon/                       # OS-independent path handling for anonymization (usernames, home spellings)
 │   ├── home/                       # LoopGuard home: daemon.json, token; home/homedir is the dependency-free part the shim uses
 │   ├── proc/                       # detached spawn and pid liveness (package syscall only)
 │   ├── textdiff/                   # unified line diff for `init --dry-run`
@@ -942,3 +943,4 @@ Decisions made while building the hook binary, `init`/`uninstall`, `doctor`, `st
 41. **Flag file** `<home>/capture.on` (`loopguard capture on|off`), stat'ed at most every 2 s by the daemon (`capture.Switch`), so no restart; `LOOPGUARD_CAPTURE=1` still forces it on. `/healthz` reports the daemon's view; `status` and `doctor` show the flag file or the daemon's view.
 42. **Export** (`capture export`) redacts and de-homes again, then replaces names learned from the payloads: the username of any home directory path (and its words of ≥ 3 letters, e.g. first and last name) → `user`, the last element of each `cwd` (unless generic: `src`, `desktop`, ...) → `project`, matched as whole words, case-insensitively; emails → `<email>`. It writes the `.golden` for each payload (`claudecode.Golden`, the same mapping the test uses), and prints the replaced names so they can be checked. Default output: `testdata/hooks/claude-code/<claude --version>/` when run in the repo.
 43. **Golden test** walks `testdata/hooks/claude-code/**`, so exported captures are tested with no code change.
+44. **Anonymization is OS-independent** (`internal/anon`, CI fix): paths in payloads and transcripts come from whatever OS recorded them, so they are parsed as strings, never with `path/filepath` or `runtime.GOOS`. Both separators; `C:\Users\x`, `C:/Users/x`, `/c/Users/x`, `/mnt/c/Users/x`, `/Users/x`, `/home/x`; Claude Code's project-dir encodings (`C--Users-x-…`, `-home-x-…`, `-Users-x-…`); and the 8.3 short name of a long username (`C:\Users\JANEQ-~1`). Home matching always ignores case. The anonymization tests run Windows-, macOS-, and Linux-style inputs on every OS. `filepath` stays only for files on this machine (settings, home, logs, transcript discovery, hashing an edited file).
