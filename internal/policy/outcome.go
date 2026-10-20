@@ -9,9 +9,13 @@ import (
 // Intervention outcomes (LLD §11 interventions.outcome).
 const (
 	OutcomeRecovered = "recovered"
+	OutcomeMovedOn   = "moved_on"
 	OutcomeContinued = "continued_loop"
 	OutcomeHalted    = "halted"
 	OutcomeUnknown   = "unknown"
+	// OutcomeNA is for interventions that aren't about a loop (self-
+	// protection): there is nothing to recover from.
+	OutcomeNA = "n/a"
 )
 
 // OutcomeAfterCalls is how many completed calls after an intervention its
@@ -33,9 +37,12 @@ type Resolved struct {
 // calls later:
 //
 //   - halted: the intervention was a halt, or the loop was halted since;
-//   - recovered: the loop's family succeeded, its error changed (D2), the
-//     repeated action gave a different result (D1), or the loop stopped
-//     signaling (no signal in the last quietCalls calls);
+//   - recovered: the looping command itself (one of the loop's command
+//     identities) later succeeded or failed with another error (D2), or
+//     the repeated action gave a different result (D1);
+//   - moved_on: none of that, but the loop stopped signaling (no signal
+//     in the last quietCalls calls): the agent did something else, which
+//     says nothing about whether the problem was solved;
 //   - continued_loop: otherwise.
 //
 // End resolves the rest when the turn or the session ends first: as
@@ -49,6 +56,7 @@ type Outcomes struct {
 type pendingOutcome struct {
 	d          event.Decision
 	family     string
+	identities map[string]bool
 	anchor     *event.ErrorSignature
 	actionFP   uint64
 	resultFP   uint64
@@ -72,15 +80,22 @@ func (o *Outcomes) Add(s *session.SessionState, ds []event.Decision) []Resolved 
 		if d.WouldHave == "" || d.WouldHave == event.ActionNone {
 			continue
 		}
+		if d.Detector == event.DetectorSelfProtection {
+			out = append(out, Resolved{d, OutcomeNA})
+			continue
+		}
 		if d.WouldHave == event.ActionHalt {
 			out = append(out, Resolved{d, OutcomeHalted})
 			continue
 		}
-		p := &pendingOutcome{d: d, startCall: s.CallCount, lastSignal: s.CallCount}
+		p := &pendingOutcome{d: d, startCall: s.CallCount, lastSignal: s.CallCount, identities: map[string]bool{}}
 		if l := s.Loops[d.LoopKey]; l != nil {
 			p.family, p.anchor, p.actionFP = l.Family, l.Anchor, l.ActionFP
 			if p.family == "" {
 				p.family = l.Evidence.Family
+			}
+			for id := range l.Identities {
+				p.identities[id] = true
 			}
 		}
 		if p.actionFP != 0 {
@@ -131,8 +146,11 @@ func (o *Outcomes) Observe(s *session.SessionState, c *event.ToolCall, sigs []ev
 			continue
 		}
 		outcome := OutcomeContinued
-		if p.recovered || p.lastSignal+quietCalls <= s.CallCount {
+		switch {
+		case p.recovered:
 			outcome = OutcomeRecovered
+		case p.lastSignal+quietCalls <= s.CallCount:
+			outcome = OutcomeMovedOn
 		}
 		out = append(out, Resolved{p.d, outcome})
 	}
@@ -144,7 +162,13 @@ func (o *Outcomes) Observe(s *session.SessionState, c *event.ToolCall, sigs []ev
 func (o *Outcomes) recovers(p *pendingOutcome, c *event.ToolCall) bool {
 	switch p.d.Detector {
 	case event.DetectorRepeatedFailure:
-		if c.Family != p.family || c.Polling {
+		// The same command, by identity (the family for tools without
+		// identities): another command of the family passing is moving on.
+		same := c.Family == p.family
+		if c.Identity != "" && len(p.identities) > 0 {
+			same = p.identities[c.Identity]
+		}
+		if !same || c.Polling {
 			return false
 		}
 		return !c.Failed() || (p.anchor != nil && !normalize.SameError(p.anchor, c.ErrorSig, o.maxDist))

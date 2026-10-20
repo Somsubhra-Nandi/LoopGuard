@@ -1,6 +1,7 @@
 package session
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -44,6 +45,18 @@ type SessionState struct {
 	// Subagent is true for a subagent's stream. Its loops are nudged and
 	// denied inside the stream but never halt the parent's turn.
 	Subagent bool
+	// HaltNote is set when a halt was returned to the agent (enforce mode);
+	// the next human prompt then gets a note that the stop is over.
+	HaltNote bool
+	// PermissionWait sums, over calls in permission mode "default", the
+	// time between the pre event and the post that the tool itself didn't
+	// run (its reported duration_ms): mostly the human deciding on the
+	// permission prompt. Time-based halts don't count it. Use
+	// AddPermissionWait.
+	PermissionWait time.Duration
+
+	runTimes map[string][]time.Duration // by command identity, last maxRunTimes
+	waits    []waitSample               // PermissionWait over time, for loops' start
 
 	// NudgesThisTurn counts nudges (or would-have nudges) since the last
 	// human prompt, for the policy's per-turn cap.
@@ -140,6 +153,20 @@ type LoopState struct {
 	// messages of decisions made later on pre events.
 	Count    int
 	Evidence event.Evidence
+	// Identities are the command identities of the loop's failing runs
+	// (D1/D2): a block applies to these, not to the whole family.
+	Identities map[string]bool
+	// Files were edited during the loop (between its attempts). An edit to
+	// another file after a deny is a real change, worth one more try.
+	Files map[string]bool
+	// LastFailSeq is the seq of the loop's latest failing run.
+	LastFailSeq uint64
+	// RetrySeq is the seq of the pre that was let through for one more try
+	// after a real change (0: none); RetryPending until its post arrives.
+	RetrySeq     uint64
+	RetryPending bool
+	// WaitAtStart is SessionState.PermissionWait when the loop started.
+	WaitAtStart time.Duration
 }
 
 // New returns an empty session. Only th.Detectors.SimHashMaxDistance is
@@ -197,6 +224,8 @@ func (s *SessionState) HumanPrompt(ev *event.Event) {
 // NewTurn starts a new turn at the current seq, as a human prompt does.
 // The daemon also calls it on a subagent's stream when the parent session
 // gets a human prompt.
+// HaltNote survives it: the turn's first decision reports that the stop
+// is over.
 func (s *SessionState) NewTurn() {
 	s.TurnSeq = s.seq
 	s.Loops = make(map[string]*LoopState)
@@ -274,6 +303,16 @@ func (s *SessionState) Record(c *event.ToolCall) {
 	s.Progress.Record(c.Seq(), c.Progress, c.Family, c.FamilyProgress)
 	s.Calls.Push(c)
 	s.CallCount++
+	if c.Identity != "" && c.Duration > 0 {
+		if s.runTimes == nil {
+			s.runTimes = map[string][]time.Duration{}
+		}
+		rt := append(s.runTimes[c.Identity], c.Duration)
+		if len(rt) > maxRunTimes {
+			rt = rt[len(rt)-maxRunTimes:]
+		}
+		s.runTimes[c.Identity] = rt
+	}
 
 	seq := c.Seq()
 	if c.Family != "" {
@@ -329,6 +368,50 @@ func (s *SessionState) Record(c *event.ToolCall) {
 	if c.TodosDone >= 0 && isTodoList(c) {
 		s.todosDone = c.TodosDone
 	}
+}
+
+// maxRunTimes is how many run times are kept per command identity.
+const maxRunTimes = 20
+
+// waitSample is PermissionWait as of a time.
+type waitSample struct {
+	at    time.Time
+	total time.Duration
+}
+
+// AddPermissionWait adds time spent waiting for a permission decision,
+// observed at t.
+func (s *SessionState) AddPermissionWait(d time.Duration, t time.Time) {
+	s.PermissionWait += d
+	s.waits = append(s.waits, waitSample{t, s.PermissionWait})
+	if len(s.waits) > CallHistory {
+		s.waits = s.waits[len(s.waits)-CallHistory:]
+	}
+}
+
+// PermissionWaitAt returns PermissionWait as it was at t (0 before the
+// oldest kept sample, so a very old loop discounts all later waits).
+func (s *SessionState) PermissionWaitAt(t time.Time) time.Duration {
+	var total time.Duration
+	for _, w := range s.waits {
+		if w.at.After(t) {
+			break
+		}
+		total = w.total
+	}
+	return total
+}
+
+// MedianRunTime returns the median run time of a command identity's
+// completed runs in this session (0 if none).
+func (s *SessionState) MedianRunTime(identity string) time.Duration {
+	rt := s.runTimes[identity]
+	if len(rt) == 0 {
+		return 0
+	}
+	sorted := append([]time.Duration(nil), rt...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	return sorted[len(sorted)/2]
 }
 
 func appendCapped[T any](xs []T, x T) []T {

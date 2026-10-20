@@ -37,6 +37,9 @@ func (p *Pipeline) NewSession(key string, agent event.AgentKind) *session.Sessio
 	return session.New(key, agent, p.th)
 }
 
+// permModeManual is the permission mode in which a human approves calls.
+const permModeManual = "default"
+
 // Result is the outcome of one event.
 type Result struct {
 	Call      *event.ToolCall // completed call (post events only)
@@ -54,6 +57,7 @@ func (p *Pipeline) Handle(s *session.SessionState, ev *event.Event, fileHashAfte
 	switch ev.Phase {
 	case event.PhasePrompt:
 		s.HumanPrompt(ev)
+		return Result{Decisions: p.policy.Prompt(s)}
 	case event.PhasePre:
 		return p.pre(s, ev)
 	case event.PhasePost, event.PhasePostFailure:
@@ -75,8 +79,18 @@ func (p *Pipeline) post(s *session.SessionState, ev *event.Event, fileHashAfter 
 	s.Assign(ev)
 	c := p.builder.Build(ev)
 	c.FileHashAfter = fileHashAfter
+	// Duration is the tool's own run time when the agent reports it, else
+	// the time since the pre event. In permission mode "default" the gap
+	// between the two is mostly the human deciding on the permission
+	// prompt, which time-based halts must not count.
+	c.Duration = ev.RunTime
 	if pre := s.TakePending(ev.ToolUseID); pre != nil {
-		c.Duration = ev.ReceivedAt.Sub(pre.ReceivedAt)
+		gap := ev.ReceivedAt.Sub(pre.ReceivedAt)
+		if c.Duration == 0 {
+			c.Duration = gap
+		} else if ev.PermMode == permModeManual && gap > c.Duration {
+			s.AddPermissionWait(gap-c.Duration, ev.ReceivedAt)
+		}
 	}
 	s.Record(c)
 	sigs := p.detect.Observe(s, c)

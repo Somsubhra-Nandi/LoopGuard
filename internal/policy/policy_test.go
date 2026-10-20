@@ -2,6 +2,7 @@ package policy
 
 import (
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,12 +183,34 @@ func TestHaltAfterMinutes(t *testing.T) {
 		f.post(0, rf(0.8))
 	}
 	f.clock = f.clock.Add(time.Duration(th.Policy.HaltAfterMinutes) * time.Minute)
-	ds := f.pre("npm test")
-	if len(ds) != 1 || ds[0].WouldHave != event.ActionHalt {
-		t.Errorf("after %v min: %v", th.Policy.HaltAfterMinutes, would(ds))
+	// Past the time limit, but no deny was delivered yet: deny first.
+	if ds := f.pre("npm test"); len(ds) != 1 || ds[0].WouldHave != event.ActionDeny {
+		t.Errorf("first attempt after %v min: %v, want deny", th.Policy.HaltAfterMinutes, would(ds))
+	}
+	if ds := f.pre("npm test"); len(ds) != 1 || ds[0].WouldHave != event.ActionHalt || !strings.Contains(ds[0].Reason, "has lasted") {
+		t.Errorf("second attempt: %+v, want a time-based halt", ds)
 	}
 	if ds := f.pre("npm test"); len(ds) != 0 {
 		t.Errorf("halted twice: %v", would(ds))
+	}
+}
+
+func TestSlowFamiliesNeverHaltOnTime(t *testing.T) {
+	th := config.Default()
+	th.SlowFamilies = []string{"npm"}
+	f := newFixture(th)
+	f.post(0, rf(0.6))
+	for i := 0; i < 3; i++ {
+		f.post(0, rf(0.8))
+	}
+	f.clock = f.clock.Add(10 * time.Hour)
+	// Only the count halts: deny, deny, then halt on the 3rd attempt.
+	var got []event.Action
+	for i := 0; i < 3; i++ {
+		got = append(got, would(f.pre("npm test"))...)
+	}
+	if len(got) != 3 || got[0] != event.ActionDeny || got[1] != event.ActionDeny || got[2] != event.ActionHalt {
+		t.Errorf("slow family: %v, want deny, deny, halt", got)
 	}
 }
 

@@ -16,7 +16,8 @@ import (
 // characters; LoopGuard's messages stay far below (LLD §3.2).
 const (
 	MaxMessage    = 1200 // whole message, in characters
-	maxErrorLines = 2
+	maxErrorLines = 3
+	maxCommandLen = 120
 	maxLineLen    = 160
 	maxFiles      = 6
 	maxPathLen    = 100
@@ -99,13 +100,19 @@ func (m msg) nudge() string {
 	return clipRunes(b.String(), MaxMessage)
 }
 
-// deny is the permissionDecisionReason of a blocked action.
-func (m msg) deny() string {
+// deny is the permissionDecisionReason of a blocked action c. A repeated
+// failure names the command itself: only that command is blocked, not its
+// whole family.
+func (m msg) deny(c *event.ToolCall) string {
 	var s string
 	switch m.l.Detector {
 	case event.DetectorRepeatedFailure:
+		cmd := m.family()
+		if c != nil && c.Command != "" {
+			cmd = clipRunes(redact.String(c.Command), maxCommandLen)
+		}
 		s = fmt.Sprintf("LoopGuard blocked this command: it is the same `%s` run that has failed %d times with the same error, "+
-			"with no change in outcome. A different approach, or a question to the user, is needed before running it again.", m.family(), m.l.Count)
+			"with no change in outcome. A different approach, or a question to the user, is needed before running it again.", cmd, m.l.Count)
 	case event.DetectorExactRepeat:
 		s = fmt.Sprintf("LoopGuard blocked this call: it is the same `%s` call that has run %d times with the same result, "+
 			"with nothing changed in between. A different approach, or a question to the user, is needed before running it again.", m.family(), m.l.Count)
@@ -118,46 +125,40 @@ func (m msg) deny() string {
 	return clipRunes(s, MaxMessage)
 }
 
-// halt is the stopReason, shown to the human. It always ends with the
-// command that lets the agent continue.
-func (m msg) halt() string {
-	var what string
-	switch m.l.Detector {
-	case event.DetectorRepeatedFailure:
-		what = fmt.Sprintf("stuck on `%s` (%d failures with the same error %s)", m.family(), m.l.Count, over(m.elapsed))
-	case event.DetectorExactRepeat:
-		what = fmt.Sprintf("stuck repeating the same `%s` call (%d runs with the same result %s)", m.family(), m.l.Count, over(m.elapsed))
-	case event.DetectorOscillation:
-		what = fmt.Sprintf("stuck changing %s back and forth (%d reverts %s)", m.path(), m.l.Count, over(m.elapsed))
-	default:
-		what = fmt.Sprintf("stuck in a %s loop %s", strings.ReplaceAll(m.l.Detector, "_", " "), over(m.elapsed))
-	}
-	if m.l.Denies > 0 {
-		what += fmt.Sprintf(", retried after %s", plural(m.l.Denies, "block"))
-	}
-	tail := " Details: loopguard status. To let it continue, run: " + PauseCommand(m.session)
-	return clipRunes("LoopGuard halted the agent: "+what+".", MaxMessage-utf8.RuneCountInString(tail)) + tail
+// HaltPrefix starts every halt text. A halt ends one turn; the session
+// goes on with the next human message, and the wording must say so: an
+// earlier "halted this session" made Claude refuse to run anything in the
+// following turns.
+const HaltPrefix = "LoopGuard stopped this turn: "
+
+// haltMessage is the stopReason, shown to the human: the reason, that the
+// next message continues normally, and how to turn LoopGuard off for the
+// session if the human wants that.
+func haltMessage(reason, shortID string) string {
+	tail := ". Your next message continues normally. (To turn LoopGuard off for this session: " + PauseCommand(shortID) + ")"
+	return clipRunes(HaltPrefix+reason, MaxMessage-utf8.RuneCountInString(tail)) + tail
 }
 
-// haltReason is the halt's one-line reason (status, and the systemMessage
-// Claude Code shows).
+// haltReason is the halt's one-line reason, e.g. "`pytest` failed 7 times
+// with the same error and the loop continued after 2 blocks" (status,
+// stopReason, and the systemMessage Claude Code shows).
 func (m msg) haltReason(byTime bool, minutes, limit float64) string {
 	why := fmt.Sprintf("the loop continued after %s", plural(m.l.Denies, "block"))
 	if byTime {
-		why = fmt.Sprintf("the loop has lasted %.0f min (limit %.0f)", minutes, limit)
+		why = fmt.Sprintf("the loop has lasted %.0f min (limit %.0f) after %s", minutes, limit, plural(m.l.Denies, "block"))
 	}
 	switch m.l.Detector {
 	case event.DetectorRepeatedFailure:
-		return fmt.Sprintf("`%s` failed %d times with the same error; %s", m.family(), m.l.Count, why)
+		return fmt.Sprintf("`%s` failed %d times with the same error and %s", m.family(), m.l.Count, why)
 	case event.DetectorExactRepeat:
-		return fmt.Sprintf("the same `%s` call ran %d times with the same result; %s", m.family(), m.l.Count, why)
+		return fmt.Sprintf("the same `%s` call ran %d times with the same result and %s", m.family(), m.l.Count, why)
 	case event.DetectorOscillation:
-		return fmt.Sprintf("%s was reverted %d times; %s", m.path(), m.l.Count, why)
+		return fmt.Sprintf("%s was reverted %d times and %s", m.path(), m.l.Count, why)
 	}
-	return why
+	return fmt.Sprintf("a %s loop went on and %s", strings.ReplaceAll(m.l.Detector, "_", " "), why)
 }
 
-// errorLines writes ":" and up to two redacted error lines, or ".".
+// errorLines writes ":" and up to three redacted error lines, or ".".
 func (m msg) errorLines(b *strings.Builder) {
 	lines := redact.Lines(m.l.Evidence.ErrorLines)
 	n := 0

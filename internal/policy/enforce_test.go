@@ -53,7 +53,7 @@ func TestEnforceMode(t *testing.T) {
 		if want == event.ActionDeny && !strings.HasPrefix(ds[0].Message, "LoopGuard blocked this command") {
 			t.Errorf("deny message %q", ds[0].Message)
 		}
-		if want == event.ActionHalt && !strings.HasSuffix(ds[0].Message, "loopguard pause --session t") {
+		if want == event.ActionHalt && (!strings.HasPrefix(ds[0].Message, HaltPrefix) || !strings.HasSuffix(ds[0].Message, "loopguard pause --session t)")) {
 			t.Errorf("halt message %q", ds[0].Message)
 		}
 	}
@@ -146,7 +146,9 @@ func TestTemplates(t *testing.T) {
 	banned := []string{"SYSTEM", "System:", "you must", "You must", "MUST", "IMPORTANT", "ignore previous", "<system"}
 	for i, l := range loops {
 		m := newMsg(s, l, t0.Add(4*time.Minute), "")
-		for kind, text := range map[string]string{"nudge": m.nudge(), "deny": m.deny(), "halt": m.halt(), "reason": m.haltReason(false, 0, 0)} {
+		halt := haltMessage(m.haltReason(false, 0, 0), m.session)
+		for kind, text := range map[string]string{"nudge": m.nudge(), "deny": m.deny(nil), "halt": halt,
+			"reason": m.haltReason(false, 0, 0), "time halt": haltMessage(m.haltReason(true, 34, 30), m.session)} {
 			if n := len([]rune(text)); n > MaxMessage || n == 0 {
 				t.Errorf("loop %d %s: %d characters", i, kind, n)
 			}
@@ -159,8 +161,15 @@ func TestTemplates(t *testing.T) {
 				t.Errorf("loop %d %s leaks a secret: %s", i, kind, text)
 			}
 		}
-		if h := m.halt(); !strings.HasSuffix(h, "To let it continue, run: loopguard pause --session 1a2b3c4d") {
-			t.Errorf("loop %d halt doesn't end with the pause command: %s", i, h)
+		if !strings.HasSuffix(halt, "(To turn LoopGuard off for this session: loopguard pause --session 1a2b3c4d)") {
+			t.Errorf("loop %d halt doesn't end with the pause command: %s", i, halt)
+		}
+		// A halt ends a turn, not the session: the only "session" is in the
+		// optional pause command.
+		scope := strings.TrimSuffix(halt, "(To turn LoopGuard off for this session: loopguard pause --session 1a2b3c4d)")
+		if strings.Contains(strings.ToLower(scope), "session") || !strings.HasPrefix(halt, "LoopGuard stopped this turn: ") ||
+			!strings.Contains(halt, "Your next message continues normally.") {
+			t.Errorf("loop %d halt describes its scope wrongly: %s", i, halt)
 		}
 	}
 
@@ -168,14 +177,20 @@ func TestTemplates(t *testing.T) {
 	want := "LoopGuard observation: `npm test` has failed 5 times in the last 4 min with the same error:\n" +
 		"  Error: token <REDACTED:anthropic_key> rejected\n" +
 		"  Expected: 110\n" +
+		"  Received: 100\n" +
 		"Between attempts, these files were edited: src/cart.ts. The error did not change after any of these edits.\n" +
 		"Repeating similar edits is unlikely to change the result. Options that often help: re-reading the full error and the code it points to, checking assumptions (versions, config, env), trying a different approach, or asking the user."
 	if got := m.nudge(); got != want {
 		t.Errorf("nudge:\n%s\nwant:\n%s", got, want)
 	}
-	if got := m.halt(); got != "LoopGuard halted the agent: stuck on `npm test` (5 failures with the same error over 4 min), retried after 2 blocks. "+
-		"Details: loopguard status. To let it continue, run: loopguard pause --session 1a2b3c4d" {
+	if got := haltMessage(m.haltReason(false, 0, 0), m.session); got != "LoopGuard stopped this turn: `npm test` failed 5 times with the same error "+
+		"and the loop continued after 2 blocks. Your next message continues normally. "+
+		"(To turn LoopGuard off for this session: loopguard pause --session 1a2b3c4d)" {
 		t.Errorf("halt: %s", got)
+	}
+	cmd := &event.ToolCall{Command: "go test ./pkg/a"}
+	if got := m.deny(cmd); !strings.HasPrefix(got, "LoopGuard blocked this command: it is the same `go test ./pkg/a` run") {
+		t.Errorf("deny names %q, want the command", got)
 	}
 	if got := newMsg(s, loops[2], t0.Add(20*time.Second), "").nudge(); !strings.Contains(got, "within the last minute with the same error.\nNo files were edited") {
 		t.Errorf("nudge without evidence: %s", got)
@@ -193,15 +208,21 @@ func TestOutcomes(t *testing.T) {
 
 	setup := func() (*session.SessionState, *Outcomes) {
 		s := session.New("cc:o", event.AgentClaudeCode, config.Default())
-		s.Loops[nudge.LoopKey] = &session.LoopState{Key: nudge.LoopKey, Detector: nudge.Detector, Family: "npm test", Anchor: anchor}
+		s.Loops[nudge.LoopKey] = &session.LoopState{Key: nudge.LoopKey, Detector: nudge.Detector, Family: "npm test", Anchor: anchor,
+			Identities: map[string]bool{"npm test": true}}
 		o := NewOutcomes(4)
 		if r := o.Add(s, []event.Decision{nudge}); len(r) != 0 || o.Pending() != 1 {
 			t.Fatalf("Add: %v", r)
 		}
 		return s, o
 	}
+	// call's family is also its identity, unless given as "family|identity".
 	call := func(s *session.SessionState, family string, sig *event.ErrorSignature) *event.ToolCall {
-		c := &event.ToolCall{Event: &event.Event{ToolName: event.ToolBash}, Family: family, ErrorSig: sig, TodosDone: -1, FailingTests: -1}
+		identity := family
+		if f, id, ok := strings.Cut(family, "|"); ok {
+			family, identity = f, id
+		}
+		c := &event.ToolCall{Event: &event.Event{ToolName: event.ToolBash}, Family: family, Identity: identity, ErrorSig: sig, TodosDone: -1, FailingTests: -1}
 		s.Assign(c.Event)
 		s.Record(c)
 		return c
@@ -241,7 +262,13 @@ func TestOutcomes(t *testing.T) {
 	s, o = setup()
 	r = run(s, o, 4, "npm test", anchor, true)
 	r = append(r, run(s, o, 6, "cat", nil, false)...) // quiet for the last 6 calls
-	one("signal stopped", r, OutcomeRecovered)
+	one("signal stopped", r, OutcomeMovedOn)
+
+	s, o = setup()
+	r = run(s, o, 3, "npm test", anchor, true)
+	r = append(r, run(s, o, 1, "npm test|npm test -- cart", nil, false)...) // another command of the family passed
+	r = append(r, run(s, o, 6, "cat", nil, false)...)
+	one("another command of the family passed", r, OutcomeMovedOn)
 
 	s, o = setup()
 	r = run(s, o, 3, "npm test", anchor, true)
