@@ -96,6 +96,17 @@ ALTER TABLE interventions ADD COLUMN ts INTEGER;
 ALTER TABLE interventions ADD COLUMN detector TEXT;
 ALTER TABLE interventions ADD COLUMN reason TEXT;
 `,
+	// 3: pauses (`loopguard pause`), and outcome lookups by time.
+	`
+CREATE TABLE pauses (
+  scope      TEXT NOT NULL,             -- session | repo | all
+  target     TEXT NOT NULL DEFAULT '',  -- session id, repo path, '' for all
+  until      INTEGER,                   -- unix ms; NULL = until resumed
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (scope, target)
+);
+CREATE INDEX idx_interventions_ts ON interventions(ts);
+`,
 }
 
 // migrate creates schema_migrations if needed and applies the migrations
