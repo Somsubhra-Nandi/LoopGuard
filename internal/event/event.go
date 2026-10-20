@@ -58,6 +58,8 @@ type Event struct {
 	Transcript string // transcript_path
 	PermMode   string // permission_mode ("auto", "bypassPermissions", ...)
 	Prompt     string // UserPromptSubmit only (stored hashed + truncated)
+	Model      string // SessionStart only, if the agent reports it
+	Source     string // SessionStart only: startup | resume | clear | compact | ...
 	ReceivedAt time.Time
 	Seq        uint64          // assigned by the session
 	Raw        json.RawMessage // full payload, kept in memory only
