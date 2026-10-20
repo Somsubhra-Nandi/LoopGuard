@@ -31,9 +31,13 @@ const permModeManual = "default"
 
 // Engine is the escalation state machine (LLD §7.1).
 //
-// This is observe mode only: every Decision it returns has Action
-// ActionNone, and WouldHave records what enforce mode would have done.
-// Enforcement lands in M3.
+// Every Decision records in WouldHave what enforce mode does, with a
+// message from the §7.3 templates. Action is that same action only when
+// the session's Enforce flag is set (its effective mode is enforce);
+// otherwise it is ActionNone (observe mode, replay).
+//
+// A subagent's stream (SessionState.Subagent) is nudged and denied but
+// never halted: a halt ends the whole turn, including the parent's.
 type Engine struct {
 	th config.PolicyThresholds
 }
@@ -94,6 +98,7 @@ func (e *Engine) onSignal(s *session.SessionState, c *event.ToolCall, sig event.
 	l.LastSignalSeq = c.Seq()
 	l.LastSignalCall = s.CallCount
 	l.LastSeverity = sig.Severity
+	l.Count, l.Evidence = sig.Count, sig.Evidence
 	caps := capabilities[sig.Detector]
 
 	switch l.Stage {
@@ -111,7 +116,7 @@ func (e *Engine) onSignal(s *session.SessionState, c *event.ToolCall, sig event.
 		l.Nudges++
 		l.LastNudgeCall = s.CallCount
 		s.NudgesThisTurn++
-		return e.decision(l, sig, c.Seq(), event.ActionNudge, fmt.Sprintf(
+		return e.decision(s, l, sig, c.Seq(), event.ActionNudge, newMsg(s, l, c.Event.ReceivedAt, c.Event.Cwd).nudge(), fmt.Sprintf(
 			"%s; severity %.2f ≥ nudge threshold %.2f", describe(sig), sig.Severity, e.th.NudgeThreshold)), true
 
 	case session.StageNudged:
@@ -130,29 +135,45 @@ func (e *Engine) onSignal(s *session.SessionState, c *event.ToolCall, sig event.
 // that are being denied. A matching action would have been denied, or, once
 // the loop kept going after the first deny or has lasted too long, the
 // session would have been halted.
+//
+// In enforce mode a halted loop keeps halting matching actions until the
+// next human prompt resets the loops, in case the agent goes on anyway (a
+// halt reply that arrived too late is dropped). Observe mode records the
+// halt once.
 func (e *Engine) Pre(s *session.SessionState, c *event.ToolCall) []event.Decision {
 	var out []event.Decision
+	now := c.Event.ReceivedAt
 	for _, l := range sortedLoops(s) {
-		if l.Stage != session.StageDenying || !matches(l, c) {
+		if !matches(l, c) {
 			continue
 		}
-		caps := capabilities[l.Detector]
-		minutes := c.Event.ReceivedAt.Sub(l.StartedAt).Minutes()
+		m := newMsg(s, l, now, c.Event.Cwd)
 		sig := event.Signal{Detector: l.Detector, LoopKey: l.Key, Severity: l.LastSeverity}
+		if l.Stage == session.StageHalted {
+			if s.Enforce {
+				out = append(out, e.decision(s, l, sig, c.Seq(), event.ActionHalt, m.halt(), "the action repeats a halted loop"))
+			}
+			continue
+		}
+		if l.Stage != session.StageDenying {
+			continue
+		}
+		// A subagent's loop is denied but never halted: a halt would end the
+		// parent's turn too.
+		canHalt := capabilities[l.Detector].Halt && !s.Subagent
+		minutes := now.Sub(l.StartedAt).Minutes()
 		switch {
 		// The first deny is Denies == 1; each matching attempt after it is
 		// one more occurrence.
-		case caps.Halt && l.Denies >= e.th.HaltAfterDenyOccurrences+e.extra(s):
+		case canHalt && l.Denies >= e.th.HaltAfterDenyOccurrences+e.extra(s):
 			l.Stage = session.StageHalted
-			out = append(out, e.decision(l, sig, c.Seq(), event.ActionHalt, fmt.Sprintf(
-				"loop continued %d times after the first deny", l.Denies)))
-		case caps.Halt && minutes >= e.th.HaltAfterMinutes:
+			out = append(out, e.decision(s, l, sig, c.Seq(), event.ActionHalt, m.halt(), m.haltReason(false, 0, 0)))
+		case canHalt && minutes >= e.th.HaltAfterMinutes:
 			l.Stage = session.StageHalted
-			out = append(out, e.decision(l, sig, c.Seq(), event.ActionHalt, fmt.Sprintf(
-				"loop has lasted %.0f min ≥ %.0f min", minutes, e.th.HaltAfterMinutes)))
+			out = append(out, e.decision(s, l, sig, c.Seq(), event.ActionHalt, m.halt(), m.haltReason(true, minutes, e.th.HaltAfterMinutes)))
 		default:
 			l.Denies++
-			out = append(out, e.decision(l, sig, c.Seq(), event.ActionDeny, fmt.Sprintf(
+			out = append(out, e.decision(s, l, sig, c.Seq(), event.ActionDeny, m.deny(), fmt.Sprintf(
 				"action repeats a loop that kept going after a nudge (deny #%d)", l.Denies)))
 		}
 	}
@@ -167,10 +188,15 @@ func (e *Engine) extra(s *session.SessionState) int {
 	return 0
 }
 
-func (e *Engine) decision(l *session.LoopState, sig event.Signal, seq uint64, would event.Action, reason string) event.Decision {
+func (e *Engine) decision(s *session.SessionState, l *session.LoopState, sig event.Signal, seq uint64, would event.Action, message, reason string) event.Decision {
+	action := event.ActionNone // observe mode
+	if s.Enforce {
+		action = would
+	}
 	return event.Decision{
-		Action:    event.ActionNone, // observe mode
+		Action:    action,
 		LoopKey:   l.Key,
+		Message:   message,
 		WouldHave: would,
 		Reason:    reason,
 		Detector:  sig.Detector,

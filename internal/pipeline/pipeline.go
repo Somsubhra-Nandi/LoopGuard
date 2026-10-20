@@ -48,6 +48,9 @@ type Result struct {
 // content hash after an edit or write (0 if unknown); the caller reads the
 // disk, this package never does.
 func (p *Pipeline) Handle(s *session.SessionState, ev *event.Event, fileHashAfter uint64) Result {
+	if ev.AgentID != "" {
+		s.Subagent = true
+	}
 	switch ev.Phase {
 	case event.PhasePrompt:
 		s.HumanPrompt(ev)

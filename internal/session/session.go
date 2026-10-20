@@ -37,6 +37,14 @@ type SessionState struct {
 	TurnSeq   uint64 // seq at last human prompt
 	PermMode  string // latest permission_mode seen
 
+	// Enforce is set by the caller for each event: true when the session's
+	// effective mode is enforce, so the policy's decisions carry a real
+	// action. False (observe mode, replay) records would-have actions only.
+	Enforce bool
+	// Subagent is true for a subagent's stream. Its loops are nudged and
+	// denied inside the stream but never halt the parent's turn.
+	Subagent bool
+
 	// NudgesThisTurn counts nudges (or would-have nudges) since the last
 	// human prompt, for the policy's per-turn cap.
 	NudgesThisTurn int
@@ -128,6 +136,10 @@ type LoopState struct {
 	// Denies counts (would-have) denies since the loop entered Denying.
 	Denies       int
 	LastSeverity float64
+	// Count and Evidence are from the loop's latest signal, for the
+	// messages of decisions made later on pre events.
+	Count    int
+	Evidence event.Evidence
 }
 
 // New returns an empty session. Only th.Detectors.SimHashMaxDistance is
@@ -179,7 +191,14 @@ func (s *SessionState) Assign(ev *event.Event) {
 // loop escalation state and the per-turn nudge count are cleared.
 func (s *SessionState) HumanPrompt(ev *event.Event) {
 	s.Assign(ev)
-	s.TurnSeq = ev.Seq
+	s.NewTurn()
+}
+
+// NewTurn starts a new turn at the current seq, as a human prompt does.
+// The daemon also calls it on a subagent's stream when the parent session
+// gets a human prompt.
+func (s *SessionState) NewTurn() {
+	s.TurnSeq = s.seq
 	s.Loops = make(map[string]*LoopState)
 	s.NudgesThisTurn = 0
 }
