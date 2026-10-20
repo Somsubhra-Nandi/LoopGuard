@@ -32,9 +32,10 @@ type kindStats struct {
 }
 
 // detectorStats is one detector's interventions and outcomes. Recovery
-// rates are recovered / (recovered + continued_loop + halted), apart for
-// real and would-have interventions: outcomes still pending or unknown
-// don't count.
+// rates are recovered / (recovered + moved_on + continued_loop + halted),
+// apart for real and would-have interventions: outcomes still pending or
+// unknown don't count, and moved_on (the loop went quiet without the
+// command recovering) counts against.
 type detectorStats struct {
 	Detector     string           `json:"detector"`
 	Actions      map[string]int64 `json:"actions"`
@@ -46,18 +47,24 @@ type detectorStats struct {
 
 type outcomeCounts struct {
 	Recovered int64 `json:"recovered"`
+	MovedOn   int64 `json:"moved_on"`
 	Continued int64 `json:"continued_loop"`
 	Halted    int64 `json:"halted"`
 	Unknown   int64 `json:"unknown"`
 	Pending   int64 `json:"pending"`
+	NA        int64 `json:"not_applicable,omitempty"` // self-protection: no loop to recover from
 }
 
 func (o *outcomeCounts) add(outcome string, n int64) {
 	switch outcome {
 	case policy.OutcomeRecovered:
 		o.Recovered += n
+	case policy.OutcomeMovedOn:
+		o.MovedOn += n
 	case policy.OutcomeContinued:
 		o.Continued += n
+	case policy.OutcomeNA:
+		o.NA += n
 	case policy.OutcomeHalted:
 		o.Halted += n
 	case policy.OutcomeUnknown:
@@ -68,7 +75,7 @@ func (o *outcomeCounts) add(outcome string, n int64) {
 }
 
 func (o outcomeCounts) rate() *float64 {
-	decided := o.Recovered + o.Continued + o.Halted
+	decided := o.Recovered + o.MovedOn + o.Continued + o.Halted
 	if decided == 0 {
 		return nil
 	}
@@ -128,10 +135,10 @@ func newStatsCmd() *cobra.Command {
 		Short: "Totals: interventions by kind and detector, and how often the agent recovered",
 		Long: `Count LoopGuard's interventions (real ones in enforce mode, would-have ones
 in observe mode) by kind and by detector, with their outcomes 10 tool calls
-later: recovered (the command succeeded, the error changed, or the loop
-stopped), continued_loop, halted, or unknown (the turn or session ended
-first). The recovery rate is recovered / (recovered + continued_loop +
-halted).`,
+later: recovered (the looping command itself later succeeded, or its error
+changed), moved_on (the loop just went quiet: the agent did something else),
+continued_loop, halted, or unknown (the turn or session ended first). The
+recovery rate is recovered / (recovered + moved_on + continued_loop + halted).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			dir, err := home.Dir()
@@ -186,18 +193,18 @@ func printStats(out io.Writer, r statsReport, since string) {
 		fmt.Fprintf(out, "  %-6s %6d %11d\n", k.Action, k.Real, k.WouldHave)
 	}
 	fmt.Fprintln(out, "\nBy detector (outcome 10 calls later; recovery = recovered / decided)")
-	fmt.Fprintf(out, "  %-17s %5s %4s %4s   %-28s %-28s\n", "", "nudge", "deny", "halt", "real: rec/cont/halt/unk", "would-have: rec/cont/halt/unk")
+	fmt.Fprintf(out, "  %-17s %5s %4s %4s   %-34s %-34s\n", "", "nudge", "deny", "halt", "real: rec/moved/cont/halt/unk", "would-have: rec/moved/cont/halt/unk")
 	for _, d := range r.Detectors {
-		fmt.Fprintf(out, "  %-17s %5d %4d %4d   %-28s %-28s\n", d.Detector, d.Actions["nudge"], d.Actions["deny"], d.Actions["halt"],
+		fmt.Fprintf(out, "  %-17s %5d %4d %4d   %-34s %-34s\n", d.Detector, d.Actions["nudge"], d.Actions["deny"], d.Actions["halt"],
 			outcomeText(d.Real, d.RecoveryReal), outcomeText(d.WouldHave, d.RecoveryWH))
 	}
 }
 
 func outcomeText(o outcomeCounts, rate *float64) string {
-	s := fmt.Sprintf("%d/%d/%d/%d", o.Recovered, o.Continued, o.Halted, o.Unknown)
+	s := fmt.Sprintf("%d/%d/%d/%d/%d", o.Recovered, o.MovedOn, o.Continued, o.Halted, o.Unknown)
 	if rate != nil {
 		s += fmt.Sprintf(" (%.0f%%)", *rate*100)
-	} else if o.Recovered+o.Continued+o.Halted+o.Unknown+o.Pending > 0 {
+	} else if o.Recovered+o.MovedOn+o.Continued+o.Halted+o.Unknown+o.Pending > 0 {
 		s += " (-)"
 	}
 	if o.Pending > 0 {

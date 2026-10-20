@@ -28,6 +28,8 @@ func TestPrintStatus(t *testing.T) {
 				Detector: "repeated_failure", Action: "nudge", Outcome: "recovered", Reason: "repeated_failure: `npm test` failed 4 times\nmore"}, Project: `C:\src\shop`},
 			{Intervention: store.Intervention{SessionKey: "claude-code:a", TS: now.Add(-4 * time.Minute), Mode: store.ModeObserve,
 				Detector: "exact_repeat", Action: "deny", Reason: "x"}, Project: `C:\src\shop`},
+			{Intervention: store.Intervention{SessionKey: "claude-code:a", TS: now.Add(-5 * time.Minute), Mode: store.ModeEnforce,
+				Detector: "repeated_failure", Action: "nudge", Outcome: "moved_on", Reason: "y"}, Project: `C:\src\shop`},
 		},
 	}
 	var b bytes.Buffer
@@ -41,6 +43,7 @@ func TestPrintStatus(t *testing.T) {
 		"[1a2b3c4d]", "mode observe (this session is paused until resumed)",
 		"3m ago   real  nudge repeated_failure  recovered      shop: `npm test` failed 4 times",
 		"4m ago   would deny  exact_repeat      pending        shop: x",
+		"5m ago   real  nudge repeated_failure  moved_on       shop: y",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status lacks %q:\n%s", want, out)

@@ -208,6 +208,7 @@ func TestStatsCommand(t *testing.T) {
 	add(1, "nudge", store.ModeEnforce, "repeated_failure", "recovered")
 	add(2, "nudge", store.ModeEnforce, "repeated_failure", "recovered")
 	add(3, "nudge", store.ModeEnforce, "repeated_failure", "continued_loop")
+	add(8, "nudge", store.ModeEnforce, "repeated_failure", "moved_on")
 	add(4, "deny", store.ModeEnforce, "repeated_failure", "halted")
 	add(5, "halt", store.ModeEnforce, "repeated_failure", "halted")
 	add(6, "nudge", store.ModeObserve, "exact_repeat", "unknown")
@@ -217,11 +218,12 @@ func TestStatsCommand(t *testing.T) {
 
 	out := cli(t, false, "stats")
 	for _, want := range []string{
-		"Interventions (all time): 7",
-		"nudge       3           2",
-		"repeated_failure      3    1    1   2/1/2/0 (40%)",
-		"exact_repeat          2    0    0   0/0/0/0",
-		"0/0/0/1 (-) +1 pending",
+		"Interventions (all time): 8",
+		"nudge       4           2",
+		"rec/moved/cont/halt/unk",
+		"repeated_failure      4    1    1   2/1/1/2/0 (33%)",
+		"exact_repeat          2    0    0   0/0/0/0/0",
+		"0/0/0/0/1 (-) +1 pending",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stats lacks %q:\n%s", want, out)
@@ -231,7 +233,7 @@ func TestStatsCommand(t *testing.T) {
 	if err := json.Unmarshal([]byte(cli(t, false, "stats", "--json", "--since", "7d")), &r); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.Detectors) != 2 || r.Detectors[1].RecoveryReal == nil || *r.Detectors[1].RecoveryReal != 0.4 || r.Detectors[0].RecoveryWH != nil {
+	if len(r.Detectors) != 2 || r.Detectors[1].RecoveryReal == nil || *r.Detectors[1].RecoveryReal != 2.0/6 || r.Detectors[1].Real.MovedOn != 1 || r.Detectors[0].RecoveryWH != nil {
 		t.Errorf("stats --json: %+v", r.Detectors)
 	}
 }
