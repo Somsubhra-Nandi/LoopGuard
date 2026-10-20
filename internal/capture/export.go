@@ -22,6 +22,9 @@ type ExportOptions struct {
 	// Golden, if set, maps an exported payload to its expected golden
 	// file, written next to it as <name>.golden.
 	Golden func(payload []byte) ([]byte, error)
+	// StructureOnly replaces the payloads' content with placeholders (see
+	// StructureOnly), so the result is safe to commit.
+	StructureOnly bool
 }
 
 // ExportStats says what Export wrote.
@@ -39,7 +42,8 @@ const (
 )
 
 // Export copies the captured payloads in src (one agent's capture
-// directory) to out, for committing as golden test data. On top of what
+// directory) to out, as golden test data: kept local, or committed if
+// o.StructureOnly. On top of what
 // capture already did, it redacts every string again, replaces the home
 // directory again, and replaces the names it learns from the payloads'
 // paths: usernames (from home directories) become "user", and project
@@ -88,7 +92,11 @@ func Export(src, out string, o ExportOptions) (ExportStats, error) {
 		return st, err
 	}
 	for _, p := range payloads {
-		b, err := encode(walkStrings(p.v, x.clean))
+		v := walkStrings(p.v, x.clean)
+		if o.StructureOnly {
+			v = StructureOnly(v)
+		}
+		b, err := encode(v)
 		if err != nil {
 			return st, err
 		}

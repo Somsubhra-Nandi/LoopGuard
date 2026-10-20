@@ -89,3 +89,30 @@ func TestCommittedHookPayloadsHaveNoContent(t *testing.T) {
 		t.Fatal("no payloads under " + root)
 	}
 }
+
+func TestExportStructureOnly(t *testing.T) {
+	h := t.TempDir()
+	c := New(t.TempDir(), h)
+	b, _ := json.Marshal(map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "s",
+		"cwd": filepath.Join(h, "secret-proj"), "prompt": "fix the parser in secret-proj"})
+	if err := c.Save("claude-code", b); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	res, err := Export(filepath.Join(c.dir, "claude-code"), out, ExportOptions{UserHome: h, StructureOnly: true})
+	if err != nil || len(res.Files) != 1 {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	got, err := os.ReadFile(filepath.Join(out, res.Files[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(got, &m); err != nil {
+		t.Fatal(err)
+	}
+	// The prompt's length is taken after anonymization ("secret-proj" → "project").
+	if m["prompt"] != "<str:25>" || m["hook_event_name"] != "UserPromptSubmit" || m["cwd"] != "<HOME>/project" && m["cwd"] != `<HOME>\project` {
+		t.Errorf("got %s", got)
+	}
+}
