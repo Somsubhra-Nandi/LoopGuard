@@ -440,7 +440,7 @@ stateDiagram-v2
     Halted --> [*]: HALT + notify human
 ```
 
-- **Observe-only mode** (`mode: observe`, the default for the first 3 days after install, configurable): the state machine runs and records "would have nudged/denied/halted", but every decision rendered is `none`. This builds trust and produces data. **M1 implements observe mode only:** `Decision.Action` is always `none`, and `Decision.WouldHave` and `Decision.Reason` record the rest. Enforcement lands in M3.
+- **Observe-only mode** (`mode: observe`, the default for the first 3 days after install, configurable): the state machine runs and records "would have nudged/denied/halted", but every decision rendered is `none`. This builds trust and produces data. `Decision.WouldHave`, `.Reason`, and `.Message` always record what enforce mode does; `Decision.Action` is that action only when the session's effective mode is enforce (§12, §18 M3-A), and `none` otherwise (observe mode, pauses, replay).
 - **Resets:** "progress" is measured since the loop entered its current stage. For **repeated-failure loops it is the family's progress only** (§5.1); other loops use the general score. A reset loop keeps its nudge history, so the cooldown still applies.
 - **Deny** applies only to the **looping action**: a `PreToolUse` that matches the loop. A D1 loop matches the same `ActionFP`, a D2 loop the same family, and a D3 loop an edit or write to the same file. Other actions pass.
 - **Halt** ends the turn (`continue:false`). The session itself stays usable when the human returns; `Loops` state is reset on the next `UserPromptSubmit`.
@@ -547,7 +547,7 @@ type job struct { ev *event.Event; reply chan event.Decision }
 | `POST /v1/events?agent=claude-code` | Ingest one hook payload; returns `{"stdout": "...", "exit": 0}`, already rendered by the adapter |
 | `GET /v1/sessions?since=&repo=` | List sessions with totals |
 | `GET /v1/sessions/{id}` | Session detail: calls, signals, interventions, usage |
-| `POST /v1/sessions/{id}/pause` / `resume` | Pause enforcement for a session |
+| `GET /v1/pauses`, `POST /v1/pauses/reload` | The pauses in effect; re-read the `pauses` table after `loopguard pause`/`resume` wrote it (§18 M3-A) |
 | `GET /v1/stats?range=7d` | Loops caught, time and cost saved estimates |
 | `GET /v1/decisions?limit=10` | Newest decisions of all sessions (in observe mode: what it would have done), with detector, reason, and time (`loopguard status`) |
 | `GET /healthz`, `GET /metrics` | Health (version, pid, home id, store, capture on/off, start time) and Prometheus metrics |
@@ -658,9 +658,17 @@ CREATE TABLE usage (
 
 CREATE TABLE transcript_offsets (path TEXT PRIMARY KEY, offset INTEGER NOT NULL, inode INTEGER);
 CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER);
+
+CREATE TABLE pauses (                   -- migration 3: `loopguard pause`
+  scope      TEXT NOT NULL,             -- session | repo | all
+  target     TEXT NOT NULL DEFAULT '',  -- session id, repo root, '' for all
+  until      INTEGER,                   -- unix ms; NULL = until resumed
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (scope, target)
+);
 ```
 
-- **Intervention outcome** is computed 10 calls after each intervention: `recovered` if progress ≥ 1.0 or the loop signal stopped; `continued_loop` otherwise. This is the core product metric ("nudge success rate").
+- **Intervention outcome** is decided 10 completed calls after each intervention, real or would-have (§18 M3-A): `halted` if the loop was halted meanwhile (a halt itself is `halted` at once); `recovered` if the family succeeded or its error changed (D2), the repeated action gave a different result (D1), or the loop stopped signaling (no signal in the last 5 of the 10 calls); `continued_loop` otherwise; `unknown` if the turn or the session ended first (or the daemon restarted). This is the core product metric ("nudge success rate"); `loopguard stats` shows it per detector.
 - **Wasted time** for a loop = time from the first call in the loop (`Since`) to recovery or halt.
 - **Retention:** a nightly job deletes `calls`/`signals` older than `retention_days` (30); `sessions` and `interventions` aggregates are kept.
 
@@ -668,11 +676,13 @@ CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER)
 
 ## 12. Configuration (`internal/config`)
 
-`~/.loopguard/config.yaml` (global) merged with `<repo>/.loopguard.yaml` (per repo; the repo file can only *tighten* budgets and *disable* detectors, never loosen global hard limits):
+`~/.loopguard/config.yaml` (global) merged with `<repo>/.loopguard.yaml` (per repo, at the git root of the session's cwd). The repo file can only *tighten*, never loosen (exact rules in §18 M3-A): `enabled: false`, `mode: observe`, a detector's `enabled: false`, and lower occurrence/severity thresholds and budgets. A missing file means the defaults; an invalid one is skipped with a warning (daemon log, `doctor`). When no file sets `mode`, the mode is **observe**.
 
 ```yaml
-mode: enforce            # observe | enforce
+mode: enforce            # observe | enforce (unset: observe)
 observe_days_after_install: 3
+observe_until: 2026-10-23T09:00:00Z   # written by `init` on a new install: observe until then, even with mode: enforce
+enabled: true            # false: LoopGuard is off (meant for .loopguard.yaml)
 detectors:
   window: 50                     # calls a detector looks back (never past the last human prompt)
   simhash_max_distance: 4
@@ -898,7 +908,7 @@ Decisions made while building the store, the Claude Code adapter, the daemon, an
 12. **Single instance** is decided by `/healthz`: a daemon counts as running only if it answers with the same `home_id` (a hash of the home path). A pid in `daemon.json` alone isn't trusted (pids get reused); a port taken by something else, or by a daemon for another home, moves on to the next port.
 13. **Time budget**: the shim sends its timeout in `X-LoopGuard-Timeout-Ms`; the daemon answers within it minus 50 ms. A late event is still processed, in order; only its decision is dropped.
 14. **Every `/v1/events` failure is a 200 with an empty decision**, so the shim never has to distinguish errors.
-15. **Observe-only is enforced twice**: the policy only returns `none`, and the daemon also forces `Action = none` and `Notify = false` before rendering (TODO(M3)).
+15. **Observe-only is enforced twice**: the policy only returns `none`, and the daemon also forces `Action = none` and `Notify = false` before rendering. Since M3-A both apply only when the session's effective mode is not enforce (decision 51).
 16. **Eviction and resume**: actors are evicted after 2 h idle. A new actor for a known session continues the seq numbering (`MAX(seq)` from the store) and the counters, but **detector state starts empty**: there is no state snapshot. A panicking actor resets its state the same way.
 17. **`loops_detected`** counts distinct loop keys that reached the nudge threshold, as replay does (weaker ones are "below threshold").
 18. **File hash after edit/write** (§4.5) is read from disk only for files inside the session's `cwd`, ≤ 2 MB, without a NUL byte in the first 8 KB.
@@ -945,3 +955,36 @@ Decisions made while building the hook binary, `init`/`uninstall`, `doctor`, `st
 43. **Golden test** walks `testdata/hooks/claude-code/**` (committed: synthetic and structure-only) and `testdata/private/hooks/claude-code/**` when it exists (local: real payloads), so exported captures are tested with no code change.
 44. **Anonymization is OS-independent** (`internal/anon`, CI fix): paths in payloads and transcripts come from whatever OS recorded them, so they are parsed as strings, never with `path/filepath` or `runtime.GOOS`. Both separators; `C:\Users\x`, `C:/Users/x`, `/c/Users/x`, `/mnt/c/Users/x`, `/Users/x`, `/home/x`; Claude Code's project-dir encodings (`C--Users-x-…`, `-home-x-…`, `-Users-x-…`); and the 8.3 short name of a long username (`C:\Users\JANEQ-~1`). Home matching always ignores case. The anonymization tests run Windows-, macOS-, and Linux-style inputs on every OS. `filepath` stays only for files on this machine (settings, home, logs, transcript discovery, hashing an edited file).
 45. **Committed-payload check** (`make check-testdata`, a CI step; `TestCommittedHookPayloadsHaveNoContent`): fails if any `.json` or `.golden` under `testdata/hooks/` has a string longer than 40 characters below a content field (`capture.ContentKeys`, which includes the `.golden` names `input` and `output`). It is a safety net against committing a real export; hand-written synthetic payloads must stay within it too.
+
+### M3-A
+
+Decisions made while switching interventions on (config loading, modes, enforce mode, pause/resume, outcome tracking) that the sections above didn't specify.
+
+**Config** (§12)
+46. **Loading**: `<home>/config.yaml`, and `.loopguard.yaml` at the git root of the session's cwd. A missing file is the defaults. An **invalid** file (YAML syntax, a value of the wrong type, an out-of-range value, a polling pattern that doesn't compile, > 1 MB) is skipped as a whole: the daemon logs a warning when it (re)reads it, `doctor` warns, and the defaults (so observe mode) apply. **Unknown keys** only warn; the file is still used, since a newer LoopGuard may have written them. Files are re-read when their mtime or size changes, checked at most every 2 s per file; the daemon keeps one pipeline per distinct set of thresholds (a hash of `config.Thresholds`).
+47. **Unset `mode` means observe**, not enforce as the §12 sample suggests. An M2 install has no `config.yaml`, and it must not start enforcing when it gets the M3 binary.
+48. **What a repo file may do** (`config.Tighten`): `enabled: false`; `mode: observe` (`mode: enforce` is ignored unless the global config enforces anyway); a detector's `enabled: false` (`true` is ignored when the global config turns it off); and these numbers, **only when lower** than the global value: `exact_repeat.min_count`, `repeated_failure.min_count`, `oscillation.min_revisits`, `read_thrash.min_reads`, and `policy.{nudge_threshold, deny_after_nudges_occurrences, deny_min_severity, halt_after_deny_occurrences, halt_after_minutes, max_nudges_per_turn, nudge_cooldown_calls, manual_mode_extra_occurrences}`. Global only: `observe_until`, `observe_days_after_install`, windows, `simhash_max_distance`, `max_progress`, `revisit_window`, the reset rules, the command lists, `notify`, `privacy`. Every ignored key becomes a note that `doctor` and `loopguard mode` show. A repo file is usually committed by someone else, so it must never make LoopGuard act where the user's config says it shouldn't.
+49. **`observe_until`** (new key, RFC 3339): `init` writes `mode: enforce` and `observe_until: now + observe_days_after_install` on a **new install**: no `config.yaml`, no `loopguard.db`, and init added hooks rather than finding or updating them. An existing install keeps its config (and an M2 install, having none, stays in observe). `init --enforce` and `loopguard mode enforce` write `mode: enforce` and remove `observe_until`: an explicit enforce ends the grace period. `--dry-run` writes no config. Config edits (`config.EditFile`) keep comments and other keys, refuse a file that isn't valid YAML, and check that the result is a valid config before replacing the file atomically.
+50. **`enabled: false` is a kill switch**: events of the repo are not processed or stored at all (reply `none`; the mode shows as `off`). `LOOPGUARD_DISABLE=1` still turns the shim into a no-op before it contacts the daemon (§10).
+51. **Effective mode, per event**: `enabled` → `mode` (unset: observe) → `observe_until` → the repo file → pauses. The daemon sets `SessionState.Enforce` from it before running the pipeline; the policy fills `Decision.Action` only when it is set, and the daemon forces `none` again when it isn't. Doctor, status, `mode`, `daemon status`, `init`, and `/v1/sessions` (live sessions: `mode`, `mode_why`) show the mode with its reason, e.g. `observe (observe until 2026-10-23 09:00 after a new install, then enforce)`.
+
+**Pause** (`loopguard pause`/`resume`)
+52. **Stored in the `pauses` table** (migration 3), one row per (scope, target); scopes `session` (the agent's session id, so a session's subagent streams are paused with it), `repo` (the git root of the given path; matches a session whose repo is that root, or whose cwd is inside it, ignoring case on Windows), and `all`. `--for 30m|2h|1d` sets `until`; expiry is checked on every lookup, and expired rows are deleted on read. The CLI writes the table itself (so it works with the daemon down) and then calls `POST /v1/pauses/reload`; the daemon also re-reads it every 30 s and at start. A memory-only daemon has no pauses.
+53. **`--session` takes a prefix** of the session id (the halt message gives the first 8 characters), a key (`claude-code:<id>`), or a subagent key; an unknown or ambiguous prefix is an error. `pause` without a scope lists the pauses; `resume --all` removes every pause of any scope.
+54. **Paused = observe**: the detectors and the state machine keep running, and would-have decisions are recorded, so `resume` continues where the loop is (a loop that reached Denying while paused is denied on its next attempt).
+
+**Enforce mode** (§3.2, §7)
+55. **A halt on a pre also denies the action** (`permissionDecision: "deny"` with the one-line summary, next to `continue: false`), so the looping command doesn't run while the turn stops.
+56. **A halted loop keeps halting** matching actions in enforce mode until the next human prompt, in case the agent goes on anyway (a halt reply that missed the shim's deadline is dropped). Observe mode records the halt once (§7.2).
+57. **Subagent streams never halt**: their loops are nudged and denied inside the stream (deny goes on past the halt thresholds and `halt_after_minutes`), since `continue: false` would end the parent's turn. The pipeline marks a session as a subagent stream from `Event.AgentID`, so replay reports don't show "would have halted" for subagents either. A human prompt to the parent starts a new turn in its live subagent streams too.
+58. **A human prompt** is a `UserPromptSubmit` whose prompt is non-empty and doesn't start with `<task-notification>`, `<system-reminder>`, or `<local-command-`. Others parse to the new phase `auto_prompt` and reset nothing.
+59. **Messages** (§7.3) are built in `internal/policy/templates.go` from the loop's latest signal, now kept in `LoopState.Count`/`.Evidence` so pre-event decisions have evidence too. Up to 2 redacted error key lines (in key-line order: for jest that is the `FAIL` line and the test name, not necessarily the assertion), up to 6 edited files shown relative to the session's cwd, lines clipped at 160 characters, the whole message at 1,200. The halt message names `loopguard status` instead of `loopguard report` (M4) and has no cost yet (M4); it always ends with `To let it continue, run: loopguard pause --session <first 8 characters of the id>`. D1 got its own templates; D3's has no diff summary (only content hashes are kept); D4/D5 use a generic one. The halt's one-line reason, which is also its `systemMessage`, is in plain words. A test rejects `SYSTEM`, `you must`, `MUST`, `IMPORTANT`, and `ignore previous` in every template.
+60. **Several nudges on one call** are joined into one `additionalContext` (within the cap); otherwise the strongest action is rendered.
+61. **`interventions.mode`** is `enforce` when the action was returned to the agent (it may still have missed the shim's deadline), `observe` for a would-have.
+
+**Outcomes** (§11)
+62. Tracked per session by `policy.Outcomes` in the actor, for every intervention: resolved 10 completed calls later, at once for a halt, or as `halted` when a halt of the same loop comes first. `End` (human prompt, SessionEnd, actor eviction, panic, shutdown) resolves the rest as `recovered` if a recovery was already seen, else `unknown`. A daemon at start sets every outcome still NULL to `unknown`. Updates go through the writer as `OutcomeUpdate` rows (`UPDATE … WHERE session_key, seq, loop_key, action AND outcome IS NULL`), after the intervention's own row.
+63. **`loopguard stats [--since 7d] [--json]`**: totals by kind (real/would-have), and per detector the actions and outcomes, with recovery rate = recovered / (recovered + continued_loop + halted), apart for real and would-have (a would-have recovery is the agent recovering on its own). **`status`** shows the mode and pauses, each session's short id (and its mode when it differs), and the last 10 decisions with real/would, detector, outcome (or `pending`), and reason.
+
+**Tests and demo**
+64. **`testdata/scenarios/stuck-npm-test.jsonl`** is the scripted stuck session (payload shapes from the 2.1.304 captures; `<CWD>` is replaced at run time), written by `go test ./cmd/loopguard-hook -run ScenarioFile -update`. `TestInterventionsThroughTheHookBinary` runs it through the real `loopguard-hook` binary and a daemon in a temp home, in enforce and observe mode; `scripts/demo-intervention.ps1` runs the same file and prints every event with LoopGuard's reply.
