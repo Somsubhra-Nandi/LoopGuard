@@ -21,7 +21,19 @@ func TestMain(m *testing.M) {
 	if os.Getenv(runMainEnv) == "1" {
 		main()
 	}
+	// In-process hook runs must never start a real daemon (it would be this
+	// test binary).
+	hookSpawn = func(string) error { return nil }
 	os.Exit(m.Run())
+}
+
+// isolate points LoopGuard at an empty home, so hook tests never talk to
+// a daemon the developer has running.
+func isolate(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("LOOPGUARD_HOME", dir)
+	return dir
 }
 
 func randomBytes(t *testing.T, n int) []byte {
@@ -46,6 +58,7 @@ func hookInputs(t *testing.T) map[string][]byte {
 const subprocessTimeout = 30 * time.Second
 
 func TestHookProcessExitsZeroWithEmptyStdout(t *testing.T) {
+	isolate(t)
 	for name, input := range hookInputs(t) {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), subprocessTimeout)
@@ -55,7 +68,7 @@ func TestHookProcessExitsZeroWithEmptyStdout(t *testing.T) {
 			// holding them open.
 			cmd := exec.CommandContext(ctx, os.Args[0], "hook", "--agent", "claude-code")
 			cmd.WaitDelay = 5 * time.Second
-			cmd.Env = append(os.Environ(), runMainEnv+"=1")
+			cmd.Env = append(os.Environ(), runMainEnv+"=1", "LOOPGUARD_NO_AUTOSTART=1")
 			cmd.Stdin = bytes.NewReader(input)
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout = &stdout
@@ -90,6 +103,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 }
 
 func TestHookReadsAllOfStdin(t *testing.T) {
+	isolate(t)
 	for name, input := range hookInputs(t) {
 		t.Run(name, func(t *testing.T) {
 			in := &countingReader{r: bytes.NewReader(input)}
@@ -116,6 +130,7 @@ type errReader struct{}
 func (errReader) Read([]byte) (int, error) { return 0, errors.New("stdin closed") }
 
 func TestHookFailsOpen(t *testing.T) {
+	isolate(t)
 	cases := []struct {
 		name  string
 		args  []string
@@ -146,7 +161,6 @@ func TestStubSubcommands(t *testing.T) {
 		args      []string
 		milestone string
 	}{
-		{[]string{"daemon"}, "M2"},
 		{[]string{"init"}, "M2"},
 		{[]string{"uninstall"}, "M2"},
 		{[]string{"doctor"}, "M2"},

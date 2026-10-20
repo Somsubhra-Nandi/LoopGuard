@@ -2,8 +2,9 @@
 // Claude Code and Codex through their hook systems, detects stuck loops, and
 // nudges, blocks, or halts the agent.
 //
-// Replay (offline detection) works; the live commands are placeholders until
-// their milestones, see plan.md.
+// Replay (offline detection), the hook, and the daemon (observe mode) work;
+// the other live commands are placeholders until their milestones, see
+// plan.md.
 package main
 
 import (
@@ -12,6 +13,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Somsubhra-Nandi/loopguard/internal/shim"
 )
 
 // Set at build time via -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
@@ -31,7 +34,8 @@ func main() {
 // panics), `loopguard hook` exits 0 with nothing on stdout or stderr, so a
 // LoopGuard bug can never break the agent.
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) (code int) {
-	root := newRootCmd()
+	var hookExit int
+	root := newRootCmd(&hookExit)
 	root.SetArgs(args)
 	root.SetIn(stdin)
 	root.SetOut(stdout)
@@ -53,6 +57,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) (code int) {
 		fmt.Fprintf(stderr, "Error: %v\nRun 'loopguard --help' for usage.\n", err)
 		return 1
 	}
+	if hook {
+		return hookExit
+	}
 	return 0
 }
 
@@ -61,7 +68,9 @@ func isHookInvocation(root *cobra.Command, args []string) bool {
 	return err == nil && cmd.Name() == "hook"
 }
 
-func newRootCmd() *cobra.Command {
+// newRootCmd builds the CLI. The hook command stores its exit code in
+// hookExit.
+func newRootCmd(hookExit *int) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "loopguard",
 		Short:         "A circuit breaker for AI coding agents",
@@ -74,8 +83,8 @@ func newRootCmd() *cobra.Command {
 	}
 
 	root.AddCommand(
-		newHookCmd(),
-		stubCmd("daemon", "Run the local LoopGuard daemon", "M2"),
+		newHookCmd(hookExit),
+		newDaemonCmd(),
 		stubCmd("init", "Install LoopGuard hooks into your agents' settings", "M2"),
 		stubCmd("uninstall", "Remove LoopGuard hooks from your agents' settings", "M2"),
 		stubCmd("doctor", "Check that LoopGuard is installed and working", "M2"),
@@ -90,19 +99,34 @@ func newRootCmd() *cobra.Command {
 	return root
 }
 
-func newHookCmd() *cobra.Command {
+// hookSpawn starts the daemon for the hook when it isn't running; nil uses
+// the shim's default (this executable's `daemon`, detached). Tests replace
+// it so they never start a real daemon by accident.
+var hookSpawn func(home string) error
+
+func newHookCmd(exit *int) *cobra.Command {
 	var agent string
 	cmd := &cobra.Command{
 		Use:   "hook",
 		Short: "Handle one agent hook event (called by the agent, not by you)",
-		Args:  cobra.ArbitraryArgs,
+		Long: `Forward one agent hook event (JSON on stdin) to the LoopGuard daemon and
+print its decision. Starts the daemon if it isn't running. Always fails
+open: on any problem it prints nothing and exits 0.
+
+LOOPGUARD_DISABLE=1 turns it into a no-op; LOOPGUARD_HOOK_TIMEOUT_MS lowers
+the 800 ms timeout; LOOPGUARD_NO_AUTOSTART=1 never starts the daemon;
+LOOPGUARD_DEBUG=1 explains failures on stderr.`,
+		Args: cobra.ArbitraryArgs,
 		// Tolerate flags from newer installed hook configs.
 		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// TODO(M2): validate --agent and hand the payload to internal/shim,
-			// which forwards it to the daemon and prints the decision (LLD §10).
-			// TODO(M3): honor LOOPGUARD_DISABLE=1.
-			_, _ = io.Copy(io.Discard, cmd.InOrStdin())
+			*exit = shim.Run(shim.Options{
+				Agent:  agent,
+				Stdin:  cmd.InOrStdin(),
+				Stdout: cmd.OutOrStdout(),
+				Stderr: cmd.ErrOrStderr(),
+				Spawn:  hookSpawn,
+			})
 			return nil
 		},
 	}
