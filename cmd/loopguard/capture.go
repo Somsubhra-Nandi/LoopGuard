@@ -29,8 +29,10 @@ most 20 per event type). 'capture on' and 'capture off' take effect within a
 few seconds, without restarting the daemon. LOOPGUARD_CAPTURE=1 in the
 daemon's environment still turns it on too.
 
-'capture export' copies the payloads into testdata with a final
-anonymization pass, plus the expected .golden file for each.`,
+'capture export' copies the payloads into testdata\private (git-ignored)
+with a final anonymization pass, plus the expected .golden file for each;
+'capture export --structure-only' writes a committable copy with the content
+replaced by placeholders.`,
 	}
 	cmd.AddCommand(
 		&cobra.Command{
@@ -121,16 +123,26 @@ anonymization pass, plus the expected .golden file for each.`,
 
 func newCaptureExportCmd() *cobra.Command {
 	var outDir, ccVersion string
+	var structureOnly bool
 	cmd := &cobra.Command{
 		Use:   "export",
 		Short: "Copy captured payloads into testdata, anonymized, with .golden files",
 		Long: `Copy the captured Claude Code payloads to --out (default, inside the
-LoopGuard repo: testdata\hooks\claude-code\<claude --version>\). On top of
-capture's redaction it redacts again, replaces usernames and project names
-learned from the payloads' paths with "user" and "project", replaces email
-addresses, and writes the expected .golden file next to each payload. Review
-the files before committing them, then run:
-  go test ./internal/adapter/claudecode`,
+LoopGuard repo: testdata\private\hooks\claude-code\<claude --version>\, which
+git ignores). On top of capture's redaction it redacts again, replaces
+usernames and project names learned from the paths with "user" and "project",
+replaces email addresses, and writes the expected .golden file next to each
+payload. These are your real prompts and tool output: never commit them.
+
+With --structure-only it also replaces every string in content fields
+(prompt, tool_input, tool_response, error, last_assistant_message, ...) and
+every unrecognized field with "<str:N>" (N its length), keeping all keys,
+nesting and value types, and the enum-like fields (hook_event_name,
+tool_name, permission_mode, ...), ids and paths. Its default --out is
+testdata\hooks\claude-code\<version>\; those files are safe to commit.
+
+Then run:
+  go test ./internal/adapter/claudecode ./internal/capture`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			dir, err := home.Dir()
@@ -141,24 +153,36 @@ the files before committing them, then run:
 			if ccVersion == "" {
 				ccVersion = claudeVersion()
 			}
-			if outDir == "" {
-				wd, err := os.Getwd()
-				if err != nil {
-					return err
-				}
-				base := filepath.Join(gitRoot(wd), "testdata", "hooks", "claude-code")
-				if _, err := os.Stat(base); err != nil {
-					return errors.New("pass --out (the default, testdata\\hooks\\claude-code\\<version>, needs the LoopGuard repo as the current directory)")
-				}
-				outDir = filepath.Join(base, ccVersion)
-			}
-			users := []string{os.Getenv("USERNAME"), os.Getenv("USER")}
-			st, err := capture.Export(filepath.Join(capture.Dir(dir), "claude-code"), outDir,
-				capture.ExportOptions{Usernames: users, Golden: claudecode.Golden})
+			wd, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "Exported %d payloads (Claude Code %s) to %s\n", len(st.Files), ccVersion, outDir)
+			root := gitRoot(wd)
+			committed := filepath.Join(root, "testdata", "hooks")
+			if outDir == "" {
+				if _, err := os.Stat(committed); err != nil {
+					return errors.New(`pass --out (the default, testdata\[private\]hooks\claude-code\<version>, needs the LoopGuard repo as the current directory)`)
+				}
+				base := filepath.Join(root, "testdata", "private", "hooks", "claude-code")
+				if structureOnly {
+					base = filepath.Join(committed, "claude-code")
+				}
+				outDir = filepath.Join(base, ccVersion)
+			}
+			if !structureOnly && within(outDir, committed) {
+				return fmt.Errorf(`%s is committed: real payloads go to testdata\private\hooks (the default); use --structure-only for testdata\hooks`, outDir)
+			}
+			users := []string{os.Getenv("USERNAME"), os.Getenv("USER")}
+			st, err := capture.Export(filepath.Join(capture.Dir(dir), "claude-code"), outDir,
+				capture.ExportOptions{Usernames: users, Golden: claudecode.Golden, StructureOnly: structureOnly})
+			if err != nil {
+				return err
+			}
+			kind := "payloads"
+			if structureOnly {
+				kind = "structure-only payloads"
+			}
+			fmt.Fprintf(out, "Exported %d %s (Claude Code %s) to %s\n", len(st.Files), kind, ccVersion, outDir)
 			fmt.Fprintf(out, "  with %d .golden files (the events they map to)\n", st.Goldens)
 			if len(st.Skipped) > 0 {
 				fmt.Fprintf(out, "  skipped (not JSON): %s\n", strings.Join(st.Skipped, ", "))
@@ -171,14 +195,30 @@ the files before committing them, then run:
 				sort.Strings(names)
 				fmt.Fprintf(out, "  replaced names: %s\n", strings.Join(names, ", "))
 			}
-			fmt.Fprintln(out, "Review the files for anything private before committing them, then run:")
-			fmt.Fprintln(out, "  go test ./internal/adapter/claudecode")
+			if structureOnly {
+				fmt.Fprintln(out, "Review the ids and paths before committing them, then run:")
+			} else {
+				fmt.Fprintln(out, "These contain your real prompts and tool output: keep them local. Run:")
+			}
+			fmt.Fprintln(out, "  go test ./internal/adapter/claudecode ./internal/capture")
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&outDir, "out", "", `output directory (default: testdata\hooks\claude-code\<version> in this repo)`)
+	cmd.Flags().StringVar(&outDir, "out", "", `output directory (default: testdata\private\hooks\claude-code\<version> in this repo, or testdata\hooks\claude-code\<version> with --structure-only)`)
 	cmd.Flags().StringVar(&ccVersion, "claude-version", "", "Claude Code version for the default directory (default: from claude --version)")
+	cmd.Flags().BoolVar(&structureOnly, "structure-only", false, "replace content strings with <str:N> placeholders, for committing")
 	return cmd
+}
+
+// within reports whether path is dir or below it.
+func within(path, dir string) bool {
+	p, err1 := filepath.Abs(path)
+	d, err2 := filepath.Abs(dir)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	rel, err := filepath.Rel(d, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 var semverRe = regexp.MustCompile(`\d+\.\d+\.\d+[0-9A-Za-z.+-]*`)
