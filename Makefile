@@ -17,6 +17,7 @@ else
 RACE ?= 1
 endif
 BIN := bin/loopguard$(EXE)
+HOOK_BIN := bin/loopguard-hook$(EXE)
 
 ifeq ($(RACE),1)
 RACEFLAG := -race
@@ -28,6 +29,7 @@ all: fmt-check lint test build
 
 build:
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/loopguard
+	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(HOOK_BIN) ./cmd/loopguard-hook
 
 test:
 	$(GO) test $(RACEFLAG) ./...
