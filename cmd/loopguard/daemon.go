@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -203,29 +205,47 @@ func newDaemonStatusCmd() *cobra.Command {
 }
 
 // apiCall calls an authenticated daemon route and decodes the JSON reply
-// into out (if not nil).
+// into out (if not nil). Any status but 200 is an error.
 func apiCall(dir string, port int, method, path string, out any) error {
+	code, err := apiRequest(dir, port, method, path, nil, out)
+	if err == nil && code != http.StatusOK {
+		err = fmt.Errorf("%s %s: %d %s", method, path, code, http.StatusText(code))
+	}
+	return err
+}
+
+// apiRequest calls an authenticated daemon route with an optional JSON
+// body, and decodes a JSON reply into out (if not nil) whatever its
+// status, which it returns.
+func apiRequest(dir string, port int, method, path string, body, out any) (int, error) {
 	tok, err := home.ReadToken(dir)
 	if err != nil {
-		return err
+		return 0, err
+	}
+	var rd io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return 0, err
+		}
+		rd = bytes.NewReader(b)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, method, fmt.Sprintf("http://127.0.0.1:%d%s", port, path), nil)
+	req, err := http.NewRequestWithContext(ctx, method, fmt.Sprintf("http://127.0.0.1:%d%s", port, path), rd)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, err := (&http.Client{Transport: &http.Transport{Proxy: nil}}).Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s %s: %s", method, path, resp.Status)
+	if out != nil && strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return resp.StatusCode, err
+		}
 	}
-	if out == nil {
-		return nil
-	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return resp.StatusCode, nil
 }

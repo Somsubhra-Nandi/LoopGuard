@@ -2,8 +2,8 @@
 // Claude Code and Codex through their hook systems, detects stuck loops, and
 // nudges, blocks, or halts the agent.
 //
-// Replay (offline detection), the hook, the daemon (observe and enforce
-// modes), mode, pause, resume, and stats work; report is a placeholder
+// Replay (offline detection), the hook, the daemon (levels observe, notify,
+// assist, guard), notifications, mode, pause, resume, stop, and stats work; report is a placeholder
 // until its milestone, see plan.md.
 package main
 
@@ -101,6 +101,7 @@ func newRootCmd(hookExit *int) *cobra.Command {
 		newModeCmd(),
 		newPauseCmd(),
 		newResumeCmd(),
+		newStopCmd(),
 		newStatsCmd(),
 		newVersionCmd(),
 	)
