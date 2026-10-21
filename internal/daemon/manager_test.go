@@ -103,7 +103,16 @@ func TestActorRecoversFromPanic(t *testing.T) {
 	if panics != 1 {
 		t.Errorf("panic metric = %d, want 1", panics)
 	}
-	if s := m.Live()["claude-code:p"]; s.ToolCalls != 1 {
+	// The actor replies before it records the call, so the summary can lag.
+	var s liveSummary
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if s = m.Live()["claude-code:p"]; s.ToolCalls == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if s.ToolCalls != 1 {
 		t.Errorf("summary after recovery = %+v", s.Session)
 	}
 }
