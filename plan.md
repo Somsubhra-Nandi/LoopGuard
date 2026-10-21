@@ -102,9 +102,10 @@ Goal: `loopguard replay --since 30d` prints a correct report of loops in your pa
 
 ## M4: Cost, budgets, dashboard (week 5)
 
-- [ ] `internal/cost`: transcript tailer (offsets, dedupe by message id), `pricing.yaml` (fill in current prices from the provider pricing pages), cost per session/day/repo
-- [ ] D6 budget detector: soft → notify, hard → halt at the next tool call
-- [ ] `loopguard report [session]`: timeline of a session: calls, loops, interventions, tokens, cost, wasted time
+- [x] `internal/cost`: transcript tailer (offsets, dedupe by message id), `pricing.yaml` (fill in current prices from the provider pricing pages), cost per session/day/repo
+- [x] D6 budget detector: soft → notify, hard → halt at the next tool call
+- [x] `loopguard report [session]`: timeline of a session: calls, loops, interventions, tokens, cost, wasted time; estimated cost per command family and tool
+- [x] Cost in `replay`; tokens and cost in `status`; pricing, unknown models, and budgets in `doctor`; `loopguard stop` survives a daemon restart
 - [ ] Dashboard (go:embed + htmx, no build step):
   - [ ] overview: today / 7d / 30d: tokens, API-equivalent cost, loops caught, time saved estimate
   - [ ] sessions list → session detail timeline (calls colored by progress, loop spans highlighted)
