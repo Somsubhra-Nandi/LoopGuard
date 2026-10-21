@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
+	"github.com/Somsubhra-Nandi/loopguard/internal/detect"
 	"github.com/Somsubhra-Nandi/loopguard/internal/event"
 	"github.com/Somsubhra-Nandi/loopguard/internal/normalize"
 	"github.com/Somsubhra-Nandi/loopguard/internal/redact"
@@ -348,8 +349,16 @@ func (in *insights) flushER() {
 			nm.Closeness = 0.5 * ratio01(g.maxSame, min)
 			nm.Reason = fmt.Sprintf("same call %d×, %d with identical output, but it is a polling command (exempt)", total, g.maxSame)
 		case g.tool == event.ToolRead || g.tool == event.ToolGrep || g.tool == event.ToolGlob:
-			nm.Closeness = 0.6 * ratio01(g.maxSame, min)
-			nm.Reason = fmt.Sprintf("same %s %d×, %d with identical output; reads and searches are left to read-thrash (D4, M3)", g.tool, total, g.maxSame)
+			// Reads and searches are D4's: a near miss of it, dropped below
+			// when D4 fired on these calls.
+			need := in.th.Detectors.ReadThrash.MinReads
+			if g.tool != event.ToolRead {
+				need = max(2, need-1)
+			}
+			nm.Detector, nm.Threshold = event.DetectorReadThrash, need
+			nm.Closeness = 0.6 * ratio01(g.maxSame, need)
+			nm.Reason = fmt.Sprintf("same %s %d×, %d with identical output (read thrash needs %d with no write to the file, and little progress in the last 15 calls)",
+				g.tool, total, g.maxSame, need)
 		case g.maxSame >= min:
 			continue // fired (or deduped into D2)
 		default:
@@ -430,9 +439,10 @@ func (in *insights) flushFiles() {
 	}
 }
 
-// trackStall follows the longest stretch of calls with no progress (D5).
+// trackStall follows the longest stretch of calls with no progress (D5),
+// where looking at something new (ToolCall.Explore) is progress too.
 func (in *insights) trackStall(c *event.ToolCall, n int) {
-	if c.Progress > 0 {
+	if c.Progress > 0 || c.Explore {
 		in.stall = stallRun{}
 		return
 	}
@@ -441,8 +451,8 @@ func (in *insights) trackStall(c *event.ToolCall, n int) {
 	}
 	in.stall.n++
 	in.stall.to = n
-	if c.Failed() || c.Event.ToolName == event.ToolRead {
-		in.stall.bad++
+	if !c.Polling && (c.Failed() || detect.Looks(c)) {
+		in.stall.bad++ // a failure or a repeated read, fetch, or search
 	}
 	if in.stall.n > in.stallB.n {
 		in.stallB = in.stall
@@ -458,7 +468,8 @@ func (in *insights) flushStall() {
 	in.add(NearMiss{
 		Detector: event.DetectorStall, FromCall: s.from, ToCall: s.to, Count: s.n, Threshold: window,
 		Closeness: 0.9 * ratio01(s.n, window),
-		Reason: fmt.Sprintf("%d calls with no progress, %d of them failures or reads (stall needs %d calls with ≥8 failures/re-reads; detector arrives in M3)",
+		Reason: fmt.Sprintf("%d calls in a row with no progress, %d of them failures or repeated reads "+
+			"(a stall needs %d calls with ≥8 failures or repeated reads; new reads, fetches, and searches count as progress)",
 			s.n, s.bad, window),
 		Evidence: []string{},
 	})

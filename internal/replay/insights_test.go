@@ -111,7 +111,8 @@ func TestNearMissExactRepeatFileAndStall(t *testing.T) {
 		b.Write(replaytest.Cwd+`\notes.md`, fmt.Sprint("draft ", i)) // 5 writes, no revisit
 	}
 	for i := 0; i < 12; i++ {
-		b.Tool("Read", map[string]any{"file_path": fmt.Sprintf(`%s\f%d.go`, replaytest.Cwd, i)}, "package x", false)
+		// Two files read over and over: only the first read of each is new.
+		b.Tool("Read", map[string]any{"file_path": fmt.Sprintf(`%s\f%d.go`, replaytest.Cwd, i%2)}, "package x", false)
 	}
 	res := runOne(t, b.String())
 	er := nearByDetector(res, event.DetectorExactRepeat)
@@ -122,11 +123,22 @@ func TestNearMissExactRepeatFileAndStall(t *testing.T) {
 	if len(os) != 1 || os[0].File != "notes.md" || !strings.Contains(os[0].Reason, "written 5 times, no revisit") {
 		t.Errorf("oscillation near misses = %+v", os)
 	}
-	// No progress from call 4: rewriting a file already touched this turn
-	// scores 0, as do the reads.
+	// No progress from call 10: rewriting a file already touched this turn
+	// scores 0, and so do repeated reads; the first read of each file
+	// (calls 8 and 9) is exploration, which counts as progress.
 	st := nearByDetector(res, event.DetectorStall)
-	if len(st) != 1 || st[0].Count != 16 || st[0].FromCall != 4 || st[0].ToCall != 19 || st[0].Threshold != 25 {
+	if len(st) != 1 || st[0].Count != 10 || st[0].FromCall != 10 || st[0].ToCall != 19 || st[0].Threshold != 25 {
 		t.Errorf("stall near misses = %+v", st)
+	}
+
+	// Research: reading new files is progress, not a stall.
+	b = replaytest.NewBuilder("s2", "")
+	b.Prompt("go")
+	for i := 0; i < 30; i++ {
+		b.Tool("Read", map[string]any{"file_path": fmt.Sprintf(`%s\doc%d.md`, replaytest.Cwd, i)}, "text", false)
+	}
+	if st := nearByDetector(runOne(t, b.String()), event.DetectorStall); len(st) != 0 {
+		t.Errorf("research reported as a stall: %+v", st)
 	}
 	// Sorted closest first.
 	for i := 1; i < len(res.NearMisses); i++ {
