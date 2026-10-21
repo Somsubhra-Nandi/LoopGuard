@@ -117,7 +117,15 @@ func Run(o Options) (code int) {
 		agent = defaultAgentName
 	}
 	timeout := hookTimeout(getenv(EnvTimeoutMS))
-	status, reply, err := post(port, "/v1/events?agent="+queryEscape(agent), token, body, timeout)
+	path := "/v1/events?agent=" + queryEscape(agent)
+	// Whether the session is interactive (terminal notifications): Claude
+	// Code tells its hooks how it was started.
+	for _, p := range [][2]string{{"entry", "CLAUDE_CODE_ENTRYPOINT"}, {"attended", "CLAUDE_CODE_SESSION_ATTENDED"}} {
+		if v := getenv(p[1]); v != "" {
+			path += "&" + p[0] + "=" + queryEscape(v)
+		}
+	}
+	status, reply, err := post(port, path, token, body, timeout)
 	if err != nil {
 		var op *net.OpError
 		if errors.As(err, &op) && op.Op == "dial" {

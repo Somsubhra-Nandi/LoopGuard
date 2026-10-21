@@ -90,6 +90,24 @@ func TestRoundTripPassesReplyThrough(t *testing.T) {
 	}
 }
 
+func TestForwardsHowClaudeCodeRuns(t *testing.T) {
+	seen := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.URL.RawQuery
+		w.Write([]byte(`{"stdout":"","exit":0}`))
+	}))
+	defer srv.Close()
+	dir := fakeHome(t, serverPort(t, srv))
+	run(t, dir, samplePayload, map[string]string{"CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDE_CODE_SESSION_ATTENDED": "1"})
+	if got := <-seen; got != "agent=claude-code&entry=cli&attended=1" {
+		t.Errorf("query %q", got)
+	}
+	run(t, dir, samplePayload, nil)
+	if got := <-seen; got != "agent=claude-code" {
+		t.Errorf("query without the environment %q", got)
+	}
+}
+
 func TestExitCodeFromReply(t *testing.T) {
 	for reply, want := range map[string]int{
 		`{"stdout":"","exit":0}`:    0,
