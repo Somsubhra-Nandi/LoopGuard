@@ -14,6 +14,8 @@ import (
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/capture"
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
+	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
+	"github.com/Somsubhra-Nandi/loopguard/internal/daemon"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
@@ -27,6 +29,7 @@ type statusReport struct {
 	Mode      modeReport      `json:"mode"`
 	Sessions  []sessionStatus `json:"active_sessions"`
 	Decisions []decisionView  `json:"decisions"`
+	Today     todayUsage      `json:"today"`
 }
 
 type daemonStatus struct {
@@ -44,6 +47,8 @@ type sessionStatus struct {
 	store.Session
 	Mode    string `json:"mode,omitempty"`
 	ModeWhy string `json:"mode_why,omitempty"`
+	// Usage so far of the whole session (subagents included), API-equivalent.
+	Usage *daemon.UsageView `json:"usage,omitempty"`
 }
 
 type decisionView struct {
@@ -107,6 +112,16 @@ func collectStatus(dir string) statusReport {
 				}
 			}
 		}
+		var usage daemon.UsageReply
+		if apiCall(dir, info.Port, http.MethodGet, "/v1/usage", &usage) == nil {
+			for i := range r.Sessions {
+				if u, ok := usage.Sessions[r.Sessions[i].SessionID]; ok {
+					r.Sessions[i].Usage = &u
+				}
+			}
+			r.Today = todayUsage{Source: "daemon", Tokens: usage.Today.Tokens, CostUSD: usage.Today.CostUSD,
+				UnpricedTokens: usage.Today.UnpricedTokens, Budget: usage.Budgets.Daily.CostUSD}
+		}
 		var decs struct {
 			Decisions []store.Intervention `json:"decisions"`
 		}
@@ -128,6 +143,7 @@ func collectStatus(dir string) statusReport {
 	defer st.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	r.Today = todayFromStore(ctx, st, dir)
 	ivs, _ := st.RecentInterventions(ctx, statusDecisions)
 	for _, d := range ivs {
 		p := ""
@@ -152,6 +168,7 @@ func printStatus(out io.Writer, r statusReport, now time.Time) {
 	} else {
 		fmt.Fprintf(out, "Daemon: down (the next hook event starts it), capture %s\n", capt)
 	}
+	printToday(out, r.Today)
 
 	if d.Up {
 		fmt.Fprintf(out, "\nActive sessions (%d)\n", len(r.Sessions))
@@ -170,6 +187,9 @@ func printStatus(out io.Writer, r statusReport, now time.Time) {
 				shortDuration(now.Sub(s.LastSeenAt)), s.ToolCalls, s.Failures)
 			if s.LoopsDetected > 0 {
 				fmt.Fprintf(out, ", %d %s", s.LoopsDetected, map[bool]string{true: "loop", false: "loops"}[s.LoopsDetected == 1])
+			}
+			if u := s.Usage; u != nil && !strings.Contains(s.Key, "/") {
+				fmt.Fprintf(out, "\n    %s tokens, %s API-equivalent so far (subagents included)", compactCount(u.Tokens), cost.FormatUSD(u.CostUSD))
 			}
 			if s.Mode != "" {
 				fmt.Fprintf(out, "\n    level %s (%s)", s.Mode, s.ModeWhy)
@@ -258,4 +278,64 @@ func baseName(p string) string {
 		return p[i+1:]
 	}
 	return p
+}
+
+// todayUsage is the day's usage of all sessions, against the daily cost
+// budget.
+type todayUsage struct {
+	Source         string       `json:"source,omitempty"` // daemon | database ("": nothing recorded)
+	Tokens         int64        `json:"tokens"`
+	CostUSD        float64      `json:"cost_usd"` // API-equivalent
+	UnpricedTokens int64        `json:"unpriced_tokens,omitempty"`
+	Budget         config.Limit `json:"daily_cost_budget"`
+}
+
+// todayFromStore adds up today's usage from the database (daemon down).
+func todayFromStore(ctx context.Context, st *store.Store, dir string) todayUsage {
+	t := todayUsage{Source: "database", Budget: config.NewLoader(dir, config.LoaderOptions{}).For("").Budgets.Daily.CostUSD}
+	n := time.Now()
+	rows, err := st.UsageRows(ctx, store.UsageFilter{Since: time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, n.Location())})
+	if err != nil {
+		return t
+	}
+	pricing, _, _ := cost.LoadPricing(dir)
+	for _, u := range rows {
+		m := usageMessage(u)
+		t.Tokens += m.Usage.Total()
+		if usd, ok := pricing.Cost(m); ok {
+			t.CostUSD += usd
+		} else {
+			t.UnpricedTokens += m.Usage.Total()
+		}
+	}
+	return t
+}
+
+func printToday(out io.Writer, t todayUsage) {
+	if t.Source == "" {
+		return
+	}
+	fmt.Fprintf(out, "Today: %s API-equivalent, %s tokens", cost.FormatUSD(t.CostUSD), compactCount(t.Tokens))
+	if t.UnpricedTokens > 0 {
+		fmt.Fprintf(out, " (%s not priced)", compactCount(t.UnpricedTokens))
+	}
+	var lim []string
+	if t.Budget.Soft > 0 {
+		lim = append(lim, fmt.Sprintf("soft %s", cost.FormatUSD(t.Budget.Soft)))
+	}
+	if t.Budget.Hard > 0 {
+		lim = append(lim, fmt.Sprintf("hard %s", cost.FormatUSD(t.Budget.Hard)))
+	}
+	if len(lim) == 0 {
+		fmt.Fprintln(out, "; no daily cost budget")
+		return
+	}
+	fmt.Fprintf(out, "; daily budget %s", strings.Join(lim, ", "))
+	switch {
+	case t.Budget.Hard > 0 && t.CostUSD > t.Budget.Hard:
+		fmt.Fprint(out, " (over the hard limit)")
+	case t.Budget.Soft > 0 && t.CostUSD > t.Budget.Soft:
+		fmt.Fprint(out, " (past the soft limit)")
+	}
+	fmt.Fprintln(out)
 }
