@@ -21,6 +21,7 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter/claudecode"
 	"github.com/Somsubhra-Nandi/loopguard/internal/capture"
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
+	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
 	"github.com/Somsubhra-Nandi/loopguard/internal/daemon"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
 	"github.com/Somsubhra-Nandi/loopguard/internal/notify"
@@ -198,6 +199,8 @@ func runDoctor(dir, settings string) []adapter.Check {
 			add("database", adapter.StatusOK, fmt.Sprintf("opens, schema v%d (%s)", v, dbPath), "")
 		}
 	}
+
+	checks = append(checks, costChecks(dir, dbPath)...)
 
 	// The config files and the mode they give.
 	m := collectMode(dir, time.Now())
@@ -391,4 +394,110 @@ func roundTrip(dir string, port int, hook string) (time.Duration, error) {
 		return took, errors.New("the daemon did not record the event")
 	}
 	return took, nil
+}
+
+// costChecks covers cost accounting (M4): pricing.yaml, prices nobody
+// verified, models seen in the last 30 days without a price, and the
+// budgets in effect.
+func costChecks(dir, dbPath string) []adapter.Check {
+	var checks []adapter.Check
+	add := func(name string, st adapter.Status, detail, fix string) {
+		checks = append(checks, adapter.Check{Name: name, Status: st, Detail: detail, Fix: fix})
+	}
+	path := filepath.Join(dir, cost.PricingFile)
+	pricing, exists, err := cost.LoadPricing(dir)
+	switch {
+	case err != nil:
+		add("pricing", adapter.StatusWarn, path+" is invalid, so the shipped prices are used: "+err.Error(),
+			"fix the file, or move it aside (the daemon writes a fresh one at start)")
+	case !exists:
+		add("pricing", adapter.StatusWarn, "no "+path+"; the shipped prices are used",
+			"restart the daemon (loopguard daemon stop; the next hook starts it), which writes it")
+	default:
+		if u := pricing.Unverified(); len(u) > 0 {
+			names := make([]string, len(u))
+			for i, m := range u {
+				names[i] = m.Match
+			}
+			add("pricing", adapter.StatusWarn, "unverified prices (their cost shows as unknown): "+strings.Join(names, ", "),
+				"fill them in from the provider's pricing page in "+path+" and set checked: <date>")
+		} else {
+			checked := map[string]bool{}
+			for _, m := range pricing.Models {
+				checked[m.Checked] = true
+			}
+			add("pricing", adapter.StatusOK, fmt.Sprintf("%d model prices, checked %s (%s); costs are API-equivalent",
+				len(pricing.Models), strings.Join(sortedKeys(checked), ", "), path), "")
+		}
+	}
+
+	if fileExists(dbPath) {
+		if st, err := store.Open(dbPath); err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			rows, err := st.UsageRows(ctx, store.UsageFilter{Since: time.Now().Add(-30 * 24 * time.Hour)})
+			cancel()
+			st.Close()
+			if err == nil {
+				unknown := map[string]int64{}
+				for _, u := range rows {
+					if u.Model != cost.SyntheticModel && !pricing.Priced(u.Model) {
+						unknown[u.Model] += usageMessage(u).Usage.Total()
+					}
+				}
+				if len(unknown) > 0 {
+					var parts []string
+					for _, m := range sortedKeys(boolKeys(unknown)) {
+						parts = append(parts, fmt.Sprintf("%s (%s tokens)", m, compactCount(unknown[m])))
+					}
+					add("unknown models", adapter.StatusWarn, "seen in the last 30 days without a price, cost unknown: "+strings.Join(parts, ", "),
+						"add them to "+path+" from the provider's pricing page")
+				}
+			}
+		}
+	}
+
+	b := config.NewLoader(dir, config.LoaderOptions{}).For("").Budgets
+	add("budgets", adapter.StatusOK, describeBudgets(b)+" (soft: notify and one note to the agent; hard: stop the turn at the guard level)", "")
+	return checks
+}
+
+func boolKeys[V any](m map[string]V) map[string]bool {
+	out := make(map[string]bool, len(m))
+	for k := range m {
+		out[k] = true
+	}
+	return out
+}
+
+// describeBudgets lists the limits set, e.g. "daily cost soft $20.00;
+// session tool calls hard 500".
+func describeBudgets(b config.Budgets) string {
+	var parts []string
+	for _, scope := range config.Scopes {
+		for _, m := range config.Metrics {
+			l := b.Scope(scope).Get(m)
+			if !l.On() {
+				continue
+			}
+			var lv []string
+			for _, x := range []struct {
+				name string
+				v    float64
+			}{{"soft", l.Soft}, {"hard", l.Hard}} {
+				if x.v <= 0 {
+					continue
+				}
+				val := fmt.Sprintf("%g", x.v)
+				if m == config.MetricCost {
+					val = cost.FormatUSD(x.v)
+				}
+				lv = append(lv, x.name+" "+val)
+			}
+			parts = append(parts, fmt.Sprintf("%s %s %s", scope, strings.ReplaceAll(m, "_", " "), strings.Join(lv, ", ")))
+		}
+	}
+	if len(parts) == 0 {
+		return "none set"
+	}
+	return strings.Join(parts, "; ")
 }
