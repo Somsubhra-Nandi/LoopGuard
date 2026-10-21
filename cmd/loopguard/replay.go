@@ -10,6 +10,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
+	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
+	"github.com/Somsubhra-Nandi/loopguard/internal/home"
 	"github.com/Somsubhra-Nandi/loopguard/internal/replay"
 )
 
@@ -101,7 +103,8 @@ func runReplay(cmd *cobra.Command, f replayFlags) error {
 		return fmt.Errorf("reading transcripts: %w", err)
 	}
 	start := time.Now()
-	res := replay.Run(streams, replay.Options{Thresholds: config.Default(), Workers: f.workers, Timeline: f.calls})
+	pricing := loadPricing(cmd)
+	res := replay.Run(streams, replay.Options{Thresholds: config.Default(), Workers: f.workers, Timeline: f.calls, Pricing: pricing})
 	elapsed := time.Since(start)
 
 	out := cmd.OutOrStdout()
@@ -111,7 +114,7 @@ func runReplay(cmd *cobra.Command, f replayFlags) error {
 	case f.label:
 		return runLabel(cmd, res, f.labels)
 	}
-	ropts := replay.ReportOptions{Top: f.top, NearMisses: f.near, SoftFailures: f.soft}
+	ropts := replay.ReportOptions{Top: f.top, NearMisses: f.near, SoftFailures: f.soft, Pricing: pricing}
 	report := replay.NewReport(res, path, since, ropts, now(), elapsed)
 	if f.json {
 		return report.WriteJSON(out)
@@ -138,4 +141,19 @@ func parseSince(s string, now time.Time) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("invalid --since %q (use e.g. 30d, 12h, 2w, all)", s)
 	}
 	return now.Add(-d), nil
+}
+
+// loadPricing returns the price table: pricing.yaml in the LoopGuard home
+// if there is one (an invalid one is reported on stderr and the shipped
+// prices are used), else the shipped table. It never writes the file.
+func loadPricing(cmd *cobra.Command) *cost.Pricing {
+	dir, err := home.Dir()
+	if err != nil {
+		return cost.DefaultPricing()
+	}
+	p, _, err := cost.LoadPricing(dir)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v; using the shipped prices\n", err)
+	}
+	return p
 }
