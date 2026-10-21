@@ -180,6 +180,22 @@ type Evidence struct {
 	// (D2): the policy keeps it with the loop, and later failures that match
 	// it stay in the same loop, whatever the detector window holds.
 	Anchor *ErrorSignature
+	// Budget is set on a budget signal (D6).
+	Budget *BudgetEvidence
+}
+
+// BudgetEvidence is a budget limit that was passed (D6).
+type BudgetEvidence struct {
+	Scope  string  // session | daily | repo
+	Metric string  // cost_usd | tokens | wall_minutes | tool_calls
+	Level  string  // soft | hard
+	Value  float64 // the current value
+	Limit  float64 // the limit passed
+	Key    string  // the limit's config key, e.g. budgets.session.hard_usd
+	// Period identifies what the value is counted over: the session id, the
+	// local date, or the date and repo. A soft limit is announced once per
+	// period.
+	Period string
 }
 
 // Action is what LoopGuard does about a loop.

@@ -47,7 +47,7 @@ func New(th config.Thresholds) *Engine {
 	if d.Stall.Enabled {
 		e.detectors = append(e.detectors, &Stall{Window: d.Stall.Window})
 	}
-	// TODO(M4): D6 budget.
+	// D6 (Budget) runs apart: its inputs are totals across sessions.
 	return e
 }
 
