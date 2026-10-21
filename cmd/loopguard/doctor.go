@@ -23,6 +23,7 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/daemon"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
+	"github.com/Somsubhra-Nandi/loopguard/internal/notify"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
 
@@ -202,7 +203,7 @@ func runDoctor(dir, settings string) []adapter.Check {
 	m := collectMode(dir, time.Now())
 	switch c := m.Config; {
 	case c.Error != "":
-		add("config", adapter.StatusWarn, c.Path+" is invalid, so the defaults (observe mode) are used: "+c.Error,
+		add("config", adapter.StatusWarn, c.Path+" is invalid, so the defaults (observe level) are used: "+c.Error,
 			"fix the file, or move it aside; 'loopguard mode' writes a new one")
 	case !c.Exists:
 		add("config", adapter.StatusOK, "no "+config.GlobalFile+" yet; the defaults apply ("+c.Path+")", "")
@@ -217,7 +218,7 @@ func runDoctor(dir, settings string) []adapter.Check {
 			add("repo config", adapter.StatusWarn, rp.File.Path+" is invalid and ignored: "+rp.File.Error, "fix or remove it")
 		case len(rp.Notes) > 0 || len(rp.File.Warnings) > 0:
 			add("repo config", adapter.StatusWarn, strings.Join(append(rp.File.Warnings, rp.Notes...), "; "),
-				"a repo file can only tighten the config; remove the keys it ignores")
+				"a repo file can only raise the level and tighten thresholds; remove the keys it ignores")
 		default:
 			add("repo config", adapter.StatusOK, "valid ("+rp.File.Path+"): "+rp.Mode.Mode+" for this repo", "")
 		}
@@ -226,7 +227,64 @@ func runDoctor(dir, settings string) []adapter.Check {
 	if n := len(m.Pauses); n > 0 {
 		modeDetail += fmt.Sprintf("; %d %s in effect (loopguard pause)", n, map[bool]string{true: "pause", false: "pauses"}[n == 1])
 	}
-	add("mode", adapter.StatusOK, modeDetail, "")
+	add("level", adapter.StatusOK, modeDetail, "")
+
+	// Each active session's level, and why (a repo file, a pause, ...).
+	if up {
+		var list struct {
+			Sessions []struct {
+				sessionStatus
+				Active bool `json:"active"`
+			} `json:"sessions"`
+		}
+		if err := apiCall(dir, info.Port, http.MethodGet, "/v1/sessions", &list); err == nil {
+			var lines []string
+			for _, s := range list.Sessions {
+				if s.Active && s.SessionID != doctorSession && s.Mode != "" {
+					lines = append(lines, fmt.Sprintf("%s [%s]: %s (%s)", baseName(s.Cwd), shortSID(s.SessionID), s.Mode, s.ModeWhy))
+				}
+			}
+			if len(lines) == 0 {
+				add("sessions", adapter.StatusOK, "none active", "")
+			} else {
+				add("sessions", adapter.StatusOK, strings.Join(lines, "; "), "")
+			}
+		}
+	}
+
+	// Notifications: the channels on, and whether they can work here.
+	if n, mode, err := notifyConfig(dir); err == nil {
+		var on, problems []string
+		for _, name := range []string{config.ChannelDesktop, config.ChannelTerminal, config.ChannelNtfy, config.ChannelWebhook} {
+			ch := n.Channels()[name]
+			if !ch.Enabled {
+				continue
+			}
+			on = append(on, name)
+			switch {
+			case name == config.ChannelDesktop:
+				if ok, how := notify.DesktopAvailable(); !ok {
+					problems = append(problems, "desktop: "+how)
+				}
+			case name == config.ChannelNtfy && ch.Topic == "":
+				problems = append(problems, "ntfy has no topic")
+			case name == config.ChannelWebhook && ch.URL == "":
+				problems = append(problems, "webhook has no url")
+			}
+		}
+		detail := "channels on: " + strings.Join(on, ", ")
+		if len(on) == 0 {
+			detail = "no channel on"
+		}
+		if !config.Notifies(mode.Mode) {
+			detail += " (nothing is sent at the " + mode.Mode + " level)"
+		}
+		if len(problems) > 0 {
+			add("notifications", adapter.StatusWarn, detail+"; "+strings.Join(problems, "; "), "loopguard notify setup ntfy|webhook, then loopguard notify test")
+		} else {
+			add("notifications", adapter.StatusOK, detail+" (test them: loopguard notify test)", "")
+		}
+	}
 
 	// Capture mode.
 	flag := capture.FlagOn(dir)

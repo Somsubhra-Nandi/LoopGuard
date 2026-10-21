@@ -102,6 +102,7 @@ func newRootCmd(hookExit *int) *cobra.Command {
 		newPauseCmd(),
 		newResumeCmd(),
 		newStopCmd(),
+		newNotifyCmd(),
 		newStatsCmd(),
 		newVersionCmd(),
 	)
