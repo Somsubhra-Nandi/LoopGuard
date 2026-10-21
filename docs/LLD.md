@@ -403,15 +403,17 @@ All detectors look only at calls since the later of: the last human prompt (`Tur
 - **Severity:** 0.7 for (a), 0.6 for (b), +0.1 per extra revisit.
 
 ### D4. Read thrash
-- **Fires when:** the same file is read ≥ **5** times with no write to it in between, AND `Progress.Recent(last 15) < 0.5`. Also covers repeated identical `grep`/`glob` searches (same ActionFP ≥ 4).
-- **LoopKey:** `rt:<path or ActionFP>`
-- **Severity:** 0.4 to 0.6. **Nudge only; this detector never escalates past nudge.**
+- **Fires when**, on a successful read, the same file is read ≥ **5** times (`read_thrash.min_reads`) in the window with no successful write to it in between, AND `Progress.Recent(last 15) < 0.5`. The count is the reads minus the distinct ranges (`offset`/`limit`) among them, plus one: paging through a long file in chunks is not thrashing, reading the same part again is.
+- Also covers repeated `grep`/`glob` searches: the same ActionFP (pattern and path) with the same result ≥ **4** times (`min_reads − 1`, at least 2), with the same progress condition.
+- **LoopKey:** `rt:<path>` for files, `rt:<ActionFP>` for searches.
+- **Severity:** `min(0.6, 0.55 + 0.05*(count − threshold))`: it reaches the nudge threshold when it fires. **Nudge only; this detector never escalates past nudge** (one nudge per loop per cooldown).
 
 ### D5. No-progress stall
-- **Fires when:** ≥ **25** consecutive calls have `Progress.Recent(25) < 0.5` and at least **8** of them are failures or re-reads.
-- **LoopKey:** `st:<TurnSeq>`
-- **Severity:** 0.5. It's lower-confidence, so it nudges once and notifies the human if `notify_on_stall` is set; no deny.
-- **Exploration is progress** (TODO(M3), from the M1-C review): reads of files not seen before in the session, fetches of URLs not fetched before, and searches with a new pattern must count as progress for the stall detector. Otherwise research sessions look stalled: on real data, research sessions produced 45 false "no progress" stretches in the replay near-miss report. Repeats of the same read, fetch, or search still don't count.
+- **Fires when** the last **25** calls of the turn (`stall.window`; it needs that many) made less than **0.5** progress, counting **exploration** as progress (below), and at least **8** of them failed or repeated an earlier read, fetch, or search (polling commands count as neither).
+- **Exploration is progress** (`ToolCall.Explore`, set by the session): a successful read of a file not read before in the session, a fetch of a URL not fetched before (`WebFetch`, by URL), a web search with a new query, a `grep`/`glob` with a new pattern and path, and a read-only bash command (`read_only_commands`) not run before. Each adds **0.2** to the stall's progress, so two new things in a stuck stretch don't end it, three do. Repeats don't count. On the private corpus, research sessions produced 45 false "no progress" near misses (longest 77 calls) without this, and 4 false D5 loops in 4 sessions with the detector on but exploration not counted; with it, 0 (§18 M3-C).
+- **Quiet while a loop is handled:** no signal while a D1-D3 loop of the turn is nudged or further along; that loop's message is more specific.
+- **LoopKey:** `st:<TurnSeq>`. A stall that goes on signals again only after another 25 calls.
+- **Severity:** 0.55 (at the nudge threshold). It's lower-confidence: it **nudges once per turn** and can notify the human (event `stall`, §15); it never denies or halts.
 
 ### D6. Budget
 - Inputs: `Usage` (from the cost accountant), wall time, and tool-call count.
@@ -443,33 +445,58 @@ stateDiagram-v2
     Halted --> [*]: HALT + notify human
 ```
 
-- **Observe-only mode** (`mode: observe`, the default for the first 3 days after install, configurable): the state machine runs and records "would have nudged/denied/halted", but every decision rendered is `none`. This builds trust and produces data. `Decision.WouldHave`, `.Reason`, and `.Message` always record what enforce mode does; `Decision.Action` is that action only when the session's effective mode is enforce (§12, §18 M3-A), and `none` otherwise (observe mode, pauses, replay).
+- **Levels** (`mode:`, §12): the state machine runs the same at every level and records what the **guard** level does; the level decides what reaches the agent and the human.
+
+  | Level | Agent | Human |
+  |---|---|---|
+  | `observe` (the default, and the first 3 days after install) | nothing | nothing (records only) |
+  | `notify` | nothing | notifications (§15) |
+  | `assist` | nudges only | notifications |
+  | `guard` (`enforce` is its old name) | nudge → deny → halt | notifications |
+
+  `Decision.WouldHave`, `.Reason`, and `.Message` always record what guard does; `Decision.Action` is that action when the session's level allows it (`SessionState.Allow`: `halt` for guard, `nudge` for assist, `none` otherwise, also for pauses and replay), and `none` otherwise. The daemon caps the rendered action again (`capAction`).
+- **User stop** (`loopguard stop`, §18 M3-C): a halt the human asks for, given on the session's next tool event (pre, post, or batch end) with stopReason `Stopped by the user via loopguard stop.`, whether or not a loop was seen. It applies at every level but observe, and it is exempt from the level cap (as are the notes after a stop or block, below). The request stays until the main stream's turn ends (Stop, a human prompt, SessionEnd) or an hour passes; every halt-capable event of the session (subagents included) is halted until then, and the first is recorded (`detector = user_stop`, outcome `n/a`).
 - **Resets:** "progress" is measured since the loop entered its current stage. For **repeated-failure loops it is the family's progress only** (§5.1); other loops use the general score. A reset loop keeps its nudge history, so the cooldown still applies.
 - **Deny** applies only to the **looping action**: a `PreToolUse` that matches the loop. A D1 loop matches the same `ActionFP`, a D2 loop one of the **command identities** of its failing runs (§4.3, `normalize.Identity`: the canonical command and its meaningful arguments, so `go test ./pkg/a` doesn't block `go test ./pkg/b`, while `python3 -m pytest tests -q` matches `pytest tests`; tools without identities match by family), and a D3 loop an edit or write to the same file. Other actions pass.
 - **One more try after a real change**: once a D2 loop has denied at least once, a matching action runs once more if, since the loop's last failing run, a file not edited during the loop was edited or written. If that run fails with the loop's error, the loop is back to denying and the try counts toward the halt like a denied attempt; if it succeeds or fails differently, the loop resets. One try per failing run. (A changed command identity isn't blocked in the first place; if it fails the same way, it joins the loop's identities.)
 - **Resets of D2 loops** with identities come only from those commands succeeding or their error changing; another command of the family passing doesn't unblock the looping one.
 - **Time-based halt**: only from Denying with at least one deny delivered (a slow loop is always blocked before it is stopped). The limit is `max(halt_after_minutes, 3 × the median run time of that command identity this session)`. Families in `slow_families` never halt on time, only on counts. The time in the loop leaves out `PermissionWait`: in permission mode `default`, per call, the time from `PreToolUse` to the post minus the tool's own `duration_ms` (what can be measured: mostly the human deciding on the permission prompt, plus hook overhead).
-- **Halt** ends the turn (`continue:false`). The session itself stays usable when the human returns; `Loops` state is reset on the next human `UserPromptSubmit`, and that prompt's reply carries a short note (§7.3) that the stop is over.
-- **Cooldown:** max 1 nudge per LoopKey per 10 **completed calls**, and max 3 nudges per turn overall. Suppressed nudges are not recorded.
+- **Halt** ends the turn (`continue:false`). The session itself stays usable when the human returns; `Loops` state is reset on the next human `UserPromptSubmit`, and that prompt's reply carries a short note (§7.3) that the stop is over. After a turn whose denies reached the agent but that didn't halt, the first human prompt gets the same kind of note about the blocks.
+- **Cooldown:** max 1 nudge per LoopKey per 10 **completed calls**, and max 3 nudges per turn overall. Suppressed nudges are not recorded. D5's loop (the turn) is nudged at most once.
 - **Permission mode awareness:** in `default` (manual approval) mode, the deny and halt occurrence thresholds are raised by 1 (`manual_mode_extra_occurrences`), since a human is presumably watching. In `auto`/`bypassPermissions`/`dontAsk`, the normal thresholds apply.
-- Detector capabilities: D1/D2/D3 can deny + halt; D4 nudge only; D5 nudge + notify; D6 notify + halt.
+- Detector capabilities: D1/D2/D3 can deny + halt; D4 nudge only; D5 one nudge per turn + notify; D6 notify + halt.
 
 ### 7.2 Decision timing
 
 - Signals are produced on **post** events. If a nudge is due, it goes in the post response (`additionalContext`) and is recorded at that post.
 - Reaching the deny conditions on a post signal **arms** deny (state `Denying`). No decision is recorded then.
-- Deny decisions are evaluated on **pre** events against loops in `Denying`: each matching pre is a (would-have) deny. The first is "the first deny". The `halt_after_deny_occurrences`-th matching attempt after it (default: the 3rd attempt in total) is a halt instead. A matching pre after `halt_after_minutes` in the loop is also a halt. In observe mode the action still runs, so its post produces signals as usual; only the pre attempts count toward halt.
-- Halt decisions are rendered on the next event of any phase (pre, post, or batch_end), whichever comes first. Observe mode records the halt once, at the pre where it was decided.
+- Deny decisions are evaluated on **pre** events against loops in `Denying`: each matching pre is a (would-have) deny. The first is "the first deny". The `halt_after_deny_occurrences`-th matching attempt after it (default: the 3rd attempt in total) is a halt instead. A matching pre after `halt_after_minutes` in the loop is also a halt. Below the guard level the action still runs, so its post produces signals as usual; only the pre attempts count toward halt.
+- Halt decisions are rendered on the next event of any phase (pre, post, or batch_end), whichever comes first. Below the guard level the halt is recorded once, at the pre where it was decided.
 
 ### 7.3 Message templates (factual tone)
 
-Nudge, repeated failure:
+Nudge, repeated failure. "In a row" and "first failure … ago", never "within the last minute": in the live test Claude read that as a time window.
 ```
-LoopGuard observation: `{family}` has failed {count} times in the last {minutes} min with the same error:
-  {error_line_1}
-  {error_line_2}
+LoopGuard observation: `{family}` has failed {count} times in a row with the same error (first failure {N} min ago).
+Output excerpt:
+    {error_line_1}
+    {error_line_2}
 Between attempts, these files were edited: {files}. The error did not change after any of these edits.
 Repeating similar edits is unlikely to change the result. Options that often help: re-reading the full error and the code it points to, checking assumptions (versions, config, env), trying a different approach, or asking the user.
+```
+(`first failure less than a minute ago` under a minute.) D1 reads "the same `{family}` call has run {count} times with the same result (first run {N} min ago), and no file was changed in between."
+
+**Quoted evidence.** Error lines come from tool output, which can carry text from anywhere (a test fixture, a web page, a log). They appear only in the block introduced by `Output excerpt:`, each line indented by 4 spaces, never inside LoopGuard's own sentences: redacted (§13), markup-like tags removed (`<name …>`, `</name>`, `<!-- … -->`, `<!…>`/`<?…>`; LoopGuard's own placeholders `<N>`, `<TS>`, `<REDACTED:type>`, … are kept), control characters removed, each line clipped at 160 characters, at most 3 lines (`policy.Excerpt`). With no line left, the block is left out.
+
+Read thrash (D4):
+```
+LoopGuard observation: {path} has been read {count} times (first read {N} min ago) with no change to it in between, and little else has changed. Reading it again is unlikely to show anything new. Options that often help: working from what was already found, looking for the specific thing needed, trying a different approach, or asking the user.
+```
+A search reads "the same `{grep}` search has run {count} times with the same result (first run …). Running it again will give the same result."
+
+Stall (D5):
+```
+LoopGuard observation: the last {n} tool calls made no visible progress: {f} calls failed and {r} calls repeated earlier reads or searches (the first of these calls was {N} min ago). Options that often help: restating the goal and what is known so far, trying a different approach, or asking the user.
 ```
 
 Deny:
@@ -487,6 +514,13 @@ After a halt (first human prompt, `UserPromptSubmit` `additionalContext`):
 ```
 LoopGuard's earlier stop applied only to the previous turn; commands are not blocked now.
 ```
+After a turn with denies but no halt (same place, once):
+```
+LoopGuard's earlier blocks applied only to the previous turn; commands are not blocked now.
+```
+Both are sent only after the halt or deny reached the agent (guard level, or a user stop).
+
+User stop (`loopguard stop`): stopReason `Stopped by the user via loopguard stop.`; systemMessage `LoopGuard stopped this turn: stopped by the user (loopguard stop)`.
 
 The nudge shows up to 3 error lines, preferring assertion payloads and error messages (`Expected:`/`Received:`, pytest `E` lines, `left:`/`right:`, `error TS…`, `error[E…]`, `x_test.go:N: … want`, `SomeError: …`) over test names, and never FAIL or summary lines (`ErrorSignature.Best`).
 
@@ -558,10 +592,11 @@ type job struct { ev *event.Event; reply chan event.Decision }
 
 | Method & path | Purpose |
 |---|---|
-| `POST /v1/events?agent=claude-code` | Ingest one hook payload; returns `{"stdout": "...", "exit": 0}`, already rendered by the adapter |
+| `POST /v1/events?agent=claude-code[&entry=&attended=]` | Ingest one hook payload; returns `{"stdout": "...", "exit": 0}`, already rendered by the adapter. `entry`/`attended` are Claude Code's `CLAUDE_CODE_ENTRYPOINT`/`CLAUDE_CODE_SESSION_ATTENDED`, forwarded by the shim (interactive sessions, §15) |
 | `GET /v1/sessions?since=&repo=` | List sessions with totals |
 | `GET /v1/sessions/{id}` | Session detail: calls, signals, interventions, usage |
 | `GET /v1/pauses`, `POST /v1/pauses/reload` | The pauses in effect; re-read the `pauses` table after `loopguard pause`/`resume` wrote it (§18 M3-A) |
+| `POST /v1/stop` | `{"session": "<id prefix>"}` or `{"all": true}`: stop the named live sessions' turns at their next tool call (`loopguard stop`, §7.1); answers which sessions will stop and which observe (refused); 404 none, 409 ambiguous |
 | `GET /v1/stats?range=7d` | Loops caught, time and cost saved estimates |
 | `GET /v1/decisions?limit=10` | Newest decisions of all sessions (in observe mode: what it would have done), with detector, reason, and time (`loopguard status`) |
 | `GET /healthz`, `GET /metrics` | Health (version, pid, home id, store, capture on/off, start time) and Prometheus metrics |
@@ -690,13 +725,15 @@ CREATE TABLE pauses (                   -- migration 3: `loopguard pause`
 
 ## 12. Configuration (`internal/config`)
 
-`~/.loopguard/config.yaml` (global) merged with `<repo>/.loopguard.yaml` (per repo, at the git root of the session's cwd). The repo file can only *tighten*, never loosen (exact rules in §18 M3-A): `enabled: false`, `mode: observe`, a detector's `enabled: false`, and lower occurrence/severity thresholds and budgets. One exception, by design: a repo file may **add** `slow_families` (a repo knows its slow commands, and they only lose the time-based halt). A missing file means the defaults; an invalid one is skipped with a warning (daemon log, `doctor`). When no file sets `mode`, the mode is **observe**.
+`~/.loopguard/config.yaml` (global) merged with `<repo>/.loopguard.yaml` (per repo, at the git root of the session's cwd). The repo file may make LoopGuard **more protective, never less** (exact rules in §18 M3-A and M3-C): it may **raise** the level (`mode`), never lower it below config.yaml's (`enabled: false` in a repo file is ignored too: pause the repo instead), and it may turn a detector off and lower occurrence/severity thresholds and budgets. One exception, by design: a repo file may **add** `slow_families` (a repo knows its slow commands, and they only lose the time-based halt). A missing file means the defaults; an invalid one is skipped with a warning (daemon log, `doctor`). When no file sets `mode`, the level is **observe**.
+
+**Levels** (`mode`), least to most protective: `observe` (record only), `notify` (notify the human, never touch the agent), `assist` (notify and nudge; never deny or halt), `guard` (nudge → deny → halt, and notify). `enforce`, the M3-A name, is read as `guard`. The effective level of an event: `enabled` (config.yaml) → the higher of config.yaml's and the repo's `mode` (unset: observe) → `observe_until` (observe until then, whatever the level) → pauses (observe). `doctor`, `status`, and `/v1/sessions` show each session's level and why.
 
 ```yaml
-mode: enforce            # observe | enforce (unset: observe)
+mode: guard              # observe | notify | assist | guard (enforce = guard; unset: observe)
 observe_days_after_install: 3
-observe_until: 2026-10-23T09:00:00Z   # written by `init` on a new install: observe until then, even with mode: enforce
-enabled: true            # false: LoopGuard is off (meant for .loopguard.yaml)
+observe_until: 2026-10-23T09:00:00Z   # written by `init` on a new install: observe until then, whatever the level
+enabled: true            # false in config.yaml: LoopGuard is off (a repo file can't turn it off)
 detectors:
   window: 50                     # calls a detector looks back (never past the last human prompt)
   simhash_max_distance: 4
@@ -730,12 +767,13 @@ error_marker_families: ["pytest", "jest", "vitest", "go test", "cargo test", "ca
 budgets:
   session: { soft_usd: 5, hard_usd: 15, wall_minutes: 180 }
   daily:   { soft_usd: 20, hard_usd: 50 }
-notify:
-  desktop: true
-  terminal: true
-  ntfy:    { topic: "" , server: "https://ntfy.sh" }
-  webhook: { url: "", format: "slack" }   # slack | discord | generic
-  on: [halt, budget_soft, budget_hard, stall]
+notify:                  # global only; sent at the notify level and above (§15)
+  on: [loop_detected, halt]          # events of channels without their own on:
+  desktop:  { enabled: true }        # `desktop: true` works too
+  terminal: { enabled: false }
+  ntfy:     { enabled: false, server: "https://ntfy.sh", topic: "", on: [halt] }   # a topic alone turns it on
+  webhook:  { enabled: false, url: "", format: "slack" }   # slack | discord | generic; a url alone turns it on
+  # events: loop_detected, nudge, deny, halt, stall (budget_soft, budget_hard: accepted, M4)
 privacy:
   retention_days: 30
   store_outputs: tail   # none | tail
@@ -828,14 +866,31 @@ Prompt text, assistant text and thinking, and full outputs are dropped.
 ## 15. Notifications (`internal/notify`)
 
 ```go
-type Notifier interface { Send(ctx context.Context, n Notification) error }
-type Notification struct { Kind, Title, Body, SessionKey, Repo string; Severity float64 }
+type Sender interface { Send(ctx context.Context, ch config.Channel, n Notification) error }
+type Notification struct {
+    Event, Project, Session, Detector, Family string // Session: short id (8 characters)
+    Count int; Duration time.Duration
+    SessionKey, LoopKey string // rate limiting only, never sent
+    At time.Time
+}
 ```
-- **desktop:** beeep (macOS Notification Center, libnotify, Windows toast).
-- **terminal:** the adapter attaches `terminalSequence` (OSC 777/9) to the next hook response. This works only in interactive sessions.
-- **ntfy:** `POST {server}/{topic}` with Title/Priority headers. Free phone push with no account required.
-- **webhook:** Slack `{"text":...}` / Discord `{"content":...}` / generic JSON.
-- Sends happen async with retry (3×, exponential backoff); failures are logged and never block decisions.
+
+**When** (daemon actor, at the `notify` level and above; nothing at `observe`, `off`, or while paused):
+- `loop_detected`: a D1-D3 loop reaches the nudge threshold, once per loop per turn (whether or not the level lets the nudge through).
+- `stall`: a D5 signal (once per turn).
+- `nudge`, `deny`, `halt`: such a decision **reached the agent** (assist: nudges; guard: all). A halted loop's further halts aren't notified again. The user's own stop isn't notified.
+
+**Content** is the same on every channel, and holds only what may leave the machine: title `LoopGuard: <project folder name>`, and a body from the detector, the command family (a path is cut to its base name, secrets redacted, other characters than letters, digits, space, and `._-+:` removed, at most 40), the count, and the duration, plus `To stop it: loopguard stop <short id>` (not on a halt: the turn has stopped). Never file paths, error lines, or code. E.g. `Loop detected: "npm test" failed 6 times in a row with the same error, over 12 min. To stop it: loopguard stop 1a2b3c4d`.
+
+**Channels:**
+- **desktop:** the platform's own tool, no dependency: Windows toast through Windows PowerShell (`-EncodedCommand`, title and body passed in environment variables and XML-escaped in the script, `CREATE_NO_WINDOW`; shown under PowerShell's app id, so it is labeled "Windows PowerShell"), `osascript` on macOS (title and body as `argv`), `notify-send` elsewhere when installed. Not retried.
+- **terminal:** the adapter attaches `terminalSequence` (OSC 777) to the event's hook reply, **interactive sessions only**: the shim forwards `CLAUDE_CODE_ENTRYPOINT` and `CLAUDE_CODE_SESSION_ATTENDED` (query `entry`, `attended`), and a session is interactive when the entrypoint is `cli` and attended isn't `0`. Synchronous by nature (it is part of the reply), but only a map lookup.
+- **ntfy:** JSON publish (`POST {server}` with `topic`, `title`, `message`, `priority` 4 for a halt, else 3, `tags`), so non-ASCII titles need no header encoding. `loopguard notify setup ntfy` writes a topic `loopguard-` + 26 random base32 characters (128 bits): ntfy topics are public, so the name must be unguessable.
+- **webhook:** Slack `{"text":…}`, Discord `{"content":…}`, generic `{source, event, title, body, project, detector, family, count, duration_seconds, session, stop_command, sent_at}`. The URL is a secret: errors and `loopguard notify` never show more than its host.
+
+**Delivery:** `Dispatcher.Dispatch` checks the rate limits and queues (16 per channel, dropped and logged when full); one goroutine per channel sends, so a slow webhook delays nothing else and never a hook reply. ntfy and webhooks are retried 3× (1 s, 4 s, 16 s); each attempt has a 10 s timeout; failures are logged (`notification failed`, channel, attempt). **Rate limits, per channel:** at most 1 notification per loop per 10 minutes, except a halt (always sent once), and at most 5 per hour in all. A test binary never sends for real (`testing.Testing()`), whatever its config says.
+
+**Commands:** `loopguard notify` (channels, events, and whether the level sends anything), `notify setup ntfy [--server URL] [--new-topic]`, `notify setup webhook URL [--format …]`, `notify test` (a test notification to every enabled channel, synchronously, with each result; not rate limited).
 
 ---
 
@@ -978,9 +1033,9 @@ Decisions made while switching interventions on (config loading, modes, enforce 
 **Config** (§12)
 46. **Loading**: `<home>/config.yaml`, and `.loopguard.yaml` at the git root of the session's cwd. A missing file is the defaults. An **invalid** file (YAML syntax, a value of the wrong type, an out-of-range value, a polling pattern that doesn't compile, > 1 MB) is skipped as a whole: the daemon logs a warning when it (re)reads it, `doctor` warns, and the defaults (so observe mode) apply. **Unknown keys** only warn; the file is still used, since a newer LoopGuard may have written them. Files are re-read when their mtime or size changes, checked at most every 2 s per file; the daemon keeps one pipeline per distinct set of thresholds (a hash of `config.Thresholds`).
 47. **Unset `mode` means observe**, not enforce as the §12 sample suggests. An M2 install has no `config.yaml`, and it must not start enforcing when it gets the M3 binary.
-48. **What a repo file may do** (`config.Tighten`): `enabled: false`; `mode: observe` (`mode: enforce` is ignored unless the global config enforces anyway); a detector's `enabled: false` (`true` is ignored when the global config turns it off); and these numbers, **only when lower** than the global value: `exact_repeat.min_count`, `repeated_failure.min_count`, `oscillation.min_revisits`, `read_thrash.min_reads`, and `policy.{nudge_threshold, deny_after_nudges_occurrences, deny_min_severity, halt_after_deny_occurrences, halt_after_minutes, max_nudges_per_turn, nudge_cooldown_calls, manual_mode_extra_occurrences}`. Global only: `observe_until`, `observe_days_after_install`, windows, `simhash_max_distance`, `max_progress`, `revisit_window`, the reset rules, the command lists, `notify`, `privacy`. Every ignored key becomes a note that `doctor` and `loopguard mode` show. A repo file is usually committed by someone else, so it must never make LoopGuard act where the user's config says it shouldn't.
+48. **What a repo file may do** (`config.Tighten`; the mode and `enabled` rules are superseded by decision 78: a repo file now only raises the level): `enabled: false`; `mode: observe` (`mode: enforce` is ignored unless the global config enforces anyway); a detector's `enabled: false` (`true` is ignored when the global config turns it off); and these numbers, **only when lower** than the global value: `exact_repeat.min_count`, `repeated_failure.min_count`, `oscillation.min_revisits`, `read_thrash.min_reads`, and `policy.{nudge_threshold, deny_after_nudges_occurrences, deny_min_severity, halt_after_deny_occurrences, halt_after_minutes, max_nudges_per_turn, nudge_cooldown_calls, manual_mode_extra_occurrences}`. Global only: `observe_until`, `observe_days_after_install`, windows, `simhash_max_distance`, `max_progress`, `revisit_window`, the reset rules, the command lists, `notify`, `privacy`. Every ignored key becomes a note that `doctor` and `loopguard mode` show. A repo file is usually committed by someone else, so it must never make LoopGuard act where the user's config says it shouldn't.
 49. **`observe_until`** (new key, RFC 3339): `init` writes `mode: enforce` and `observe_until: now + observe_days_after_install` on a **new install**: no `config.yaml`, no `loopguard.db`, and init added hooks rather than finding or updating them. An existing install keeps its config (and an M2 install, having none, stays in observe). `init --enforce` and `loopguard mode enforce` write `mode: enforce` and remove `observe_until`: an explicit enforce ends the grace period. `--dry-run` writes no config. Config edits (`config.EditFile`) keep comments and other keys, refuse a file that isn't valid YAML, and check that the result is a valid config before replacing the file atomically.
-50. **`enabled: false` is a kill switch**: events of the repo are not processed or stored at all (reply `none`; the mode shows as `off`). `LOOPGUARD_DISABLE=1` still turns the shim into a no-op before it contacts the daemon (§10).
+50. **`enabled: false` is a kill switch** (in config.yaml; since M3-C, decision 78, a repo file can't turn LoopGuard off): events of the repo are not processed or stored at all (reply `none`; the mode shows as `off`). `LOOPGUARD_DISABLE=1` still turns the shim into a no-op before it contacts the daemon (§10).
 51. **Effective mode, per event**: `enabled` → `mode` (unset: observe) → `observe_until` → the repo file → pauses. The daemon sets `SessionState.Enforce` from it before running the pipeline; the policy fills `Decision.Action` only when it is set, and the daemon forces `none` again when it isn't. Doctor, status, `mode`, `daemon status`, `init`, and `/v1/sessions` (live sessions: `mode`, `mode_why`) show the mode with its reason, e.g. `observe (observe until 2026-10-23 09:00 after a new install, then enforce)`.
 
 **Pause** (`loopguard pause`/`resume`)
@@ -1033,3 +1088,38 @@ Fixes from the live enforce test in Claude Code 2.1.304 and from the M3-A review
 
 **Real prompts** (§3.1, decision 58)
 76. **Checked against private data** (counts only): the private hook captures hold one `UserPromptSubmit`, plain text. In 24 private transcripts the user messages were 184 plain human text, 39 `<pasted_content …>` (origin human), 16 slash commands (`<command-name>`), 31 `<task-notification>`, 16 `<local-command-caveat>`, 8 `<local-command-stdout>`, 18 `isMeta` text, and 4 interrupts. The rule stands; test cases now pin `<pasted_content` and `<command-name>` as human. Whether Claude Code fires `UserPromptSubmit` for task notifications at all is still unverified (no capture).
+
+### M3-C
+
+Levels, notifications, `loopguard stop`, D4/D5, quoted evidence, and the wording fixes from the M3-B live test.
+
+**Levels** (§7.1, §12)
+77. **Four levels instead of observe/enforce**: `observe`, `notify`, `assist`, `guard`; `enforce` in a file or `loopguard mode enforce` is `guard` (`mode enforce` writes `guard` and says so), so M3-A configs keep working. `SessionState.Enforce` became `Allow` (the strongest action that reaches the agent). Below guard the state machine still runs and records what guard does (the interventions table keeps `mode = observe` for those rows, `enforce` for rows that reached the agent), so `stats` and the outcome tracking work at every level.
+78. **A repo file only raises the level** (supersedes the mode and `enabled` rules of decisions 48 and 50): the higher of config.yaml's and the repo's `mode` wins; a lower one, and `enabled: false`, are ignored with a note (`doctor`, `loopguard mode`). A repo that should be quiet is paused instead (`loopguard pause --repo`), which the user does, not a committed file. `enabled: false` in config.yaml is still the global kill switch. Detector switches and thresholds keep the M3-A rules. `observe_until` applies to the repo's level too.
+79. **`observe_until` still applies to new installs**, whatever the level: `init` writes `mode: guard` with it; `loopguard mode <level>` (other than observe) ends it, like `mode enforce` did.
+80. **Pauses are `observe`**: nothing is sent to the agent or the human. D4/D5 nudges count toward `max_nudges_per_turn` like any nudge.
+
+**Notifications** (§15)
+81. **No new dependency**: desktop notifications run the platform's own tool (PowerShell, osascript, notify-send) instead of beeep. The text is passed as data (environment variables, argv), never spliced into a script.
+82. **What is notified**: `loop_detected` is the first signal at the nudge threshold of a D1-D3 loop in a turn, at any level from notify up (at notify it is the only loop event, since nothing reaches the agent); `stall` the D5 signal; `nudge`/`deny`/`halt` only decisions that reached the agent. D4 has no event of its own (a weak signal; its nudges are notified as `nudge` where they reach the agent). The user's stop isn't notified (the user did it).
+83. **Rate limits are per channel**: "1 per loop per 10 min, 5 per hour" is counted for each channel separately, since channels have their own event lists (a phone set to `halt` must not miss the halt because the desktop got the loop's `loop_detected`). A **halt always gets through the per-loop limit** (it is the loop's last word, and the human must act), but not the hourly one; repeated halts of an already-halted loop aren't notified at all.
+84. **Terminal channel only for interactive sessions**, from Claude Code's own environment forwarded by the shim (`CLAUDE_CODE_ENTRYPOINT=cli`, `CLAUDE_CODE_SESSION_ATTENDED` not `0`). Checked on this machine for an interactive session (`cli`, `1`); what `claude -p` sets is not verified here, which is why anything but `cli` (and no value, from an older shim) means not interactive.
+85. **Old `notify:` shapes stay valid**: `desktop: true`, `ntfy: { topic: … }` without `enabled` (a topic or URL alone turns the channel on), and `budget_soft`/`budget_hard` in `on:` (accepted for M4). Unknown events, formats, non-http(s) URLs, and topics outside `[-_A-Za-z0-9]{1,64}` make the file invalid, like any other bad value (decision 46).
+86. **Tests never notify for real**: daemon `Options.Senders` injects senders; with none, a test binary (`testing.Testing()`) gets no senders at all, so `go test` can't pop a toast or call ntfy whatever a temp config says. `loopguard notify test` uses a package variable the CLI tests replace.
+
+**Stop** (§7.1)
+87. **`loopguard stop <prefix> | --all`** goes to the running daemon (`POST /v1/stop`), which matches live main sessions (not subagent streams, the doctor's session, or ended sessions) by session-id prefix (an exact id wins; 409 with the candidates when ambiguous, 404 when none). With the daemon down no session is being watched, so it fails with that explanation rather than storing a request.
+88. **The request lives in the daemon's memory**, by session id, until the main stream's turn ends (Stop, a human prompt, SessionEnd) or an hour passes. Every halt-capable event of the session gets the halt until then (as a halted loop keeps halting, decision 56), subagent streams included; only the first is recorded. A human prompt cancels it (the user typed before a tool call came). At the event, an `observe` level (or a pause) drops it; the CLI refuses such sessions up front and exits 1.
+89. **Desktop buttons [Stop it] / [Let it run] are not implemented.** Per-user registration is possible (a `loopguard:` URI handler under `HKCU\Software\Classes`), but not cleanly: (a) any web page or document could then open `loopguard:stop?…` links (after a browser prompt), so each notification would need a one-time secret; (b) protocol activation starts `loopguard.exe`, a console program, so a console window flashes on every click unless a separate GUI-subsystem launcher is shipped; (c) in-process toast activation needs LoopGuard's own app id, which Windows only accepts from a Start-menu shortcut (a file outside the registry); (d) none of it can be tested without writing to the real user's registry hive. `To stop it: loopguard stop <id>` in the body does the job.
+
+**D4/D5** (§6)
+90. **D4 counts re-reads, not reads**: reads of the same file minus its distinct ranges, plus one, so paging (`offset`/`limit`) isn't thrash; searches need the same result as well as the same pattern and path. Severity starts at the nudge threshold (0.55) so a firing D4 nudges; the §6 range 0.4-0.6 would have made it nudge only from the 7th read.
+91. **D5 exploration score 0.2 per new thing**, counted inside D5 only (not in `Progress`, so D1-D3 resets don't change). New: a file read, a URL fetched (`WebFetch` by `url`), a web search query, a grep/glob pattern and path, a read-only bash command; tracked per session (up to 4,096 entries, then the set starts over). D5 stays quiet while a D1-D3 loop is handled, signals at most once per 25 calls, and nudges once per turn (`Capabilities.Once`). Severity 0.55 instead of the §6 sample's 0.5, which was below the nudge threshold.
+92. **Private corpus** (23 sessions, 24 streams, 2,914 tool calls, no real loops; aggregate counts only): D4 and D5 signals: **0** (no loops of any detector, no below-threshold signals). Stall near misses: **45 → 5** (longest stretch 77 → 10 calls; none of the 5 had a failure or repeated read). With D5 on but exploration not counted, D5 would have fired **4** times in 4 sessions. D4 near misses (the same read twice, of 5 needed): 3. The replay near-miss report now files repeated reads and searches under `read_thrash` instead of `exact_repeat`.
+
+**Messages** (§7.3)
+93. **Quoted evidence**: tool-output lines only inside `Output excerpt:`, indented 4 spaces; tags stripped except LoopGuard's own placeholders (an exact list, so an `<IMPORTANT>` from the output is removed too); control characters removed; 160 characters, 3 lines. Tested with outputs holding `<system-reminder>`, closing tool-result tags, and "you must …" sentences: they appear only in the block, shortened.
+94. **Wording from the live test**: "has failed 4 times in a row with the same error (first failure N min ago)" replaces "… within the last minute" (read as a time window); D1, D4, and D5 use the same "first … ago" form. The blocks note is sent on the first human prompt after a turn whose denies reached the agent without a halt; a halt's note wins when both apply.
+
+**CI**
+95. **govulncheck** (`make vulncheck`, `golang.org/x/vuln/cmd/govulncheck@v1.9.0`) runs on all three CI platforms, after staticcheck. It reported no vulnerabilities with Go 1.27.2 when added.
