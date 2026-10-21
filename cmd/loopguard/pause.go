@@ -94,9 +94,10 @@ func newPauseCmd() *cobra.Command {
 	var forDur string
 	cmd := &cobra.Command{
 		Use:   "pause [--session ID | --repo [PATH] | --all] [--for 30m]",
-		Short: "Stop enforcing (observe only) for a session, a repo, or everything",
-		Long: `Pause enforcement: the paused sessions are handled as in observe mode
-(LoopGuard records what it would do, and never nudges, blocks, or halts),
+		Short: "Observe only (no notifications, nudges, blocks, or stops) for a session, a repo, or everything",
+		Long: `Pause LoopGuard: the paused sessions are handled as at the observe level
+(LoopGuard records what it would do, and never notifies, nudges, blocks, or
+stops),
 until 'loopguard resume' or until --for runs out. Loop detection goes on,
 so resuming continues where it was. Pauses are kept in the database, so
 they survive daemon restarts.

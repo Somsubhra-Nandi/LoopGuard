@@ -14,12 +14,12 @@ func TestPrintStatus(t *testing.T) {
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	r := statusReport{
 		Daemon: daemonStatus{Up: true, PID: 42, Port: 47821, Version: "v1", Uptime: 7380},
-		Mode: modeReport{Mode: config.ModeInfo{Mode: "enforce", Why: "mode: enforce in config.yaml"},
+		Mode: modeReport{Mode: config.ModeInfo{Mode: "guard", Why: "mode: guard in config.yaml"},
 			Config: fileReport{Path: `C:\h\config.yaml`, Exists: true},
 			Pauses: []store.Pause{{Scope: store.PauseSession, Target: "1a2b3c4d-x"}}},
 		Sessions: []sessionStatus{
 			{Session: store.Session{Key: "claude-code:a", SessionID: "a", Cwd: `C:\src\shop`, LastSeenAt: now.Add(-12 * time.Second),
-				ToolCalls: 140, Failures: 9, LoopsDetected: 1}, Mode: "enforce"},
+				ToolCalls: 140, Failures: 9, LoopsDetected: 1}, Mode: "guard", ModeWhy: "mode: guard in config.yaml"},
 			{Session: store.Session{Key: "claude-code:1a2b3c4d-x", SessionID: "1a2b3c4d-x", Cwd: `C:\src\api`, LastSeenAt: now},
 				Mode: "observe", ModeWhy: "this session is paused until resumed"},
 		},
@@ -36,11 +36,12 @@ func TestPrintStatus(t *testing.T) {
 	printStatus(&b, r, now)
 	out := b.String()
 	for _, want := range []string{
-		"Mode: enforce (mode: enforce in config.yaml)",
+		"Level: guard (mode: guard in config.yaml)",
 		"paused: session 1a2b3c4d-x (until resumed)",
 		"Daemon: up 2h03m (pid 42, port 47821, version v1), capture off",
 		"Active sessions (2)", `C:\src\shop  [a]`, "last activity 12s ago, 140 tool calls, 9 failures, 1 loop",
-		"[1a2b3c4d]", "mode observe (this session is paused until resumed)",
+		"[1a2b3c4d]", "level observe (this session is paused until resumed)\n",
+		"level guard (mode: guard in config.yaml); stop its turn: loopguard stop a\n",
 		"3m ago   real  nudge repeated_failure  recovered      shop: `npm test` failed 4 times",
 		"4m ago   would deny  exact_repeat      pending        shop: x",
 		"5m ago   real  nudge repeated_failure  moved_on       shop: y",
@@ -51,9 +52,6 @@ func TestPrintStatus(t *testing.T) {
 	}
 	if strings.Contains(out, "more") {
 		t.Errorf("reason not cut at its first line:\n%s", out)
-	}
-	if strings.Count(out, "mode observe") != 1 {
-		t.Errorf("a session in the global mode shows its mode:\n%s", out)
 	}
 
 	b.Reset()

@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/capture"
+	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
@@ -54,11 +55,12 @@ func newStatusCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show the mode, the daemon, active sessions, and recent decisions",
-		Long: `Show the mode (observe or enforce) and why, the pauses, whether the daemon
-is up, the active Claude Code sessions (project, last activity, tool calls,
-failures), and the last 10 decisions: real ones (enforce mode) and the ones
-LoopGuard would have made (observe mode), with the detector, the reason,
+		Short: "Show the level, the daemon, active sessions, and recent decisions",
+		Long: `Show the level (observe, notify, assist, guard) and why, the pauses, whether
+the daemon is up, the active Claude Code sessions (project, last activity,
+tool calls, failures, level and why, and the command that stops each), and
+the last 10 decisions: real ones (they reached the agent) and the ones
+LoopGuard only recorded (a lower level, or a pause), with the detector, the reason,
 and the outcome 10 tool calls later. When the daemon is down, the
 decisions come from the database.`,
 		Args: cobra.NoArgs,
@@ -169,14 +171,17 @@ func printStatus(out io.Writer, r statusReport, now time.Time) {
 			if s.LoopsDetected > 0 {
 				fmt.Fprintf(out, ", %d %s", s.LoopsDetected, map[bool]string{true: "loop", false: "loops"}[s.LoopsDetected == 1])
 			}
-			if s.Mode != "" && s.Mode != r.Mode.Mode.Mode {
-				fmt.Fprintf(out, "\n    mode %s (%s)", s.Mode, s.ModeWhy)
+			if s.Mode != "" {
+				fmt.Fprintf(out, "\n    level %s (%s)", s.Mode, s.ModeWhy)
+			}
+			if !strings.Contains(s.Key, "/") && config.LevelRank(s.Mode) > config.LevelRank(config.ModeObserve) {
+				fmt.Fprintf(out, "; stop its turn: loopguard stop %s", shortSID(s.SessionID))
 			}
 			fmt.Fprintln(out)
 		}
 	}
 
-	fmt.Fprintf(out, "\nRecent decisions (last %d; real = enforced, would = observe mode)\n", statusDecisions)
+	fmt.Fprintf(out, "\nRecent decisions (last %d; real = reached the agent, would = recorded only)\n", statusDecisions)
 	if len(r.Decisions) == 0 {
 		fmt.Fprintln(out, "  nothing yet")
 	}

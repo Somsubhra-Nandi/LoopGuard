@@ -80,9 +80,9 @@ func fileExists(p string) bool {
 	return err == nil
 }
 
-// printMode prints the mode, why, and what changes it.
+// printMode prints the level, why, and what changes it.
 func printMode(out io.Writer, r modeReport) {
-	fmt.Fprintf(out, "Mode: %s (%s)\n", r.Mode.Mode, r.Mode.Why)
+	fmt.Fprintf(out, "Level: %s (%s)\n", r.Mode.Mode, r.Mode.Why)
 	switch {
 	case r.Config.Error != "":
 		fmt.Fprintf(out, "  %s is invalid, so the defaults are used: %s\n", r.Config.Path, r.Config.Error)
@@ -124,24 +124,36 @@ func pauseText(p store.Pause) string {
 	return s + " (until " + p.Until.Local().Format("2006-01-02 15:04") + ")"
 }
 
+// levelHelp says what each level does, for the mode command and init.
+var levelHelp = map[string]string{
+	config.ModeObserve: "LoopGuard records what it would do (loopguard status) and never touches Claude Code or notifies you.",
+	config.ModeNotify:  "LoopGuard notifies you about loops (loopguard notify) and never touches Claude Code.",
+	config.ModeAssist:  "LoopGuard notifies you and sends looping agents a note; it never blocks or stops anything.",
+	config.ModeGuard:   "LoopGuard notifies you, nudges looping agents, blocks the repeated action, and stops the turn if needed.",
+}
+
 func newModeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "mode [status|observe|enforce]",
-		Short: "Show or set the mode: observe (record only) or enforce (nudge, block, halt)",
-		Long: `Show LoopGuard's mode and why, or set it in config.yaml.
+		Use:   "mode [status|observe|notify|assist|guard]",
+		Short: "Show or set the level: observe, notify, assist, or guard",
+		Long: `Show LoopGuard's level and why, or set it in config.yaml.
 
-  observe  LoopGuard records what it would do (see 'loopguard status') and
-           never changes what Claude Code does.
-  enforce  LoopGuard nudges a looping agent, blocks the repeated action,
-           and halts the turn if needed.
+  observe  record only: LoopGuard records what it would do (see
+           'loopguard status'), never touches Claude Code, never notifies.
+  notify   notify you about loops (desktop by default; see 'loopguard
+           notify'); never touches Claude Code.
+  assist   notify, and nudge a looping agent with a note; never blocks
+           or stops anything.
+  guard    notify, nudge, block the repeated action, and stop the turn if
+           needed. 'enforce' is the old name of guard and still works.
 
 A new install observes for observe_days_after_install days (default 3)
-before enforcing; 'loopguard mode enforce' ends that period now. A repo's
-.loopguard.yaml can turn enforcement off for the repo (mode: observe, or
-enabled: false), never on, and 'loopguard pause' turns it off for a while.
-The running daemon picks up a change within a few seconds.`,
+before its level applies; setting a level here ends that period now. A
+repo's .loopguard.yaml can raise the level for the repo, never lower it;
+'loopguard pause' turns any level into observe for a while. The running
+daemon picks up a change within a few seconds.`,
 		Args:      cobra.MaximumNArgs(1),
-		ValidArgs: []string{"status", config.ModeObserve, config.ModeEnforce},
+		ValidArgs: append([]string{"status"}, config.Levels...),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir, err := home.Dir()
 			if err != nil {
@@ -153,28 +165,32 @@ The running daemon picks up a change within a few seconds.`,
 			if len(args) == 1 {
 				want = args[0]
 			}
-			switch want {
-			case "status":
-			case config.ModeEnforce:
-				// An explicit enforce also ends a new install's observe period.
-				if err := config.EditFile(path, config.Edit{Key: "mode", Value: config.ModeEnforce},
-					config.Edit{Key: "observe_until", Remove: true}); err != nil {
+			level := config.CanonicalMode(want)
+			switch {
+			case want == "status":
+			case config.ValidMode(want):
+				edits := []config.Edit{{Key: "mode", Value: level}}
+				if level != config.ModeObserve {
+					// An explicit level also ends a new install's observe period.
+					edits = append(edits, config.Edit{Key: "observe_until", Remove: true})
+				}
+				if err := config.EditFile(path, edits...); err != nil {
 					return err
 				}
-				fmt.Fprintf(out, "Set mode: enforce in %s\n", path)
-			case config.ModeObserve:
-				if err := config.EditFile(path, config.Edit{Key: "mode", Value: config.ModeObserve}); err != nil {
-					return err
+				fmt.Fprintf(out, "Set mode: %s in %s\n", level, path)
+				if want == config.ModeEnforce {
+					fmt.Fprintln(out, "(enforce is the old name of guard.)")
 				}
-				fmt.Fprintf(out, "Set mode: observe in %s\n", path)
 			default:
-				return fmt.Errorf("unknown mode %q (use status, observe, or enforce)", want)
+				return fmt.Errorf("unknown level %q (use status, observe, notify, assist, or guard)", want)
 			}
 			r := collectMode(dir, time.Now())
 			printMode(out, r)
-			if want == config.ModeEnforce && r.Mode.Mode == config.ModeEnforce {
-				fmt.Fprintln(out, "LoopGuard now nudges looping agents, blocks the repeated action, and halts them if needed.")
-				fmt.Fprintln(out, "Pause it with: loopguard pause --all --for 2h   Back to observe: loopguard mode observe")
+			if want != "status" && r.Mode.Mode == level {
+				fmt.Fprintln(out, levelHelp[level])
+				if level != config.ModeObserve {
+					fmt.Fprintln(out, "Pause it with: loopguard pause --all --for 2h   Record only: loopguard mode observe")
+				}
 			}
 			return nil
 		},

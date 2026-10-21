@@ -24,7 +24,7 @@ type statsReport struct {
 	Detectors []detectorStats `json:"detectors"`
 }
 
-// kindStats counts one action, real (enforce) and would-have (observe).
+// kindStats counts one action, real (it reached the agent) and would-have.
 type kindStats struct {
 	Action    string `json:"action"`
 	Real      int64  `json:"real"`
@@ -133,8 +133,8 @@ func newStatsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "stats",
 		Short: "Totals: interventions by kind and detector, and how often the agent recovered",
-		Long: `Count LoopGuard's interventions (real ones in enforce mode, would-have ones
-in observe mode) by kind and by detector, with their outcomes 10 tool calls
+		Long: `Count LoopGuard's interventions (real ones that reached the agent, would-have
+ones recorded at a lower level) by kind and by detector, with their outcomes 10 tool calls
 later: recovered (the looping command itself later succeeded, or its error
 changed), moved_on (the loop just went quiet: the agent did something else),
 continued_loop, halted, or unknown (the turn or session ended first). The

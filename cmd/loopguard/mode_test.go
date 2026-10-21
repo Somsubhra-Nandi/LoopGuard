@@ -57,13 +57,13 @@ func TestInitSetsTheMode(t *testing.T) {
 		}
 		out := cli(t, false, "init", "--settings", settings, "--hook", hook)
 		f, _ := readConfig(t, dir)
-		if f.Mode == nil || *f.Mode != config.ModeEnforce || f.ObserveUntil == nil {
+		if f.Mode == nil || *f.Mode != config.ModeGuard || f.ObserveUntil == nil {
 			t.Fatalf("config after a new install: %+v", f)
 		}
 		if d := time.Until(*f.ObserveUntil); d < 71*time.Hour || d > 73*time.Hour {
 			t.Errorf("observe_until is %v away, want 3 days", d)
 		}
-		if !strings.Contains(out, "Mode: observe (observe until ") || !strings.Contains(out, "then enforce") {
+		if !strings.Contains(out, "Level: observe (observe until ") || !strings.Contains(out, "then guard") {
 			t.Errorf("init output:\n%s", out)
 		}
 		// Running it again changes nothing.
@@ -85,7 +85,7 @@ func TestInitSetsTheMode(t *testing.T) {
 		if _, exists := readConfig(t, dir); exists {
 			t.Error("init wrote config.yaml for an existing install")
 		}
-		if !strings.Contains(out, "Mode: observe (the default") {
+		if !strings.Contains(out, "Level: observe (the default") {
 			t.Errorf("init output:\n%s", out)
 		}
 	})
@@ -94,7 +94,7 @@ func TestInitSetsTheMode(t *testing.T) {
 		settings, hook := fakeInstall(t)
 		out := cli(t, false, "init", "--settings", settings, "--hook", hook, "--enforce")
 		f, _ := readConfig(t, dir)
-		if f.Mode == nil || *f.Mode != config.ModeEnforce || f.ObserveUntil != nil || !strings.Contains(out, "Mode: enforce") {
+		if f.Mode == nil || *f.Mode != config.ModeGuard || f.ObserveUntil != nil || !strings.Contains(out, "Level: guard") {
 			t.Errorf("init --enforce: %+v\n%s", f, out)
 		}
 	})
@@ -102,22 +102,29 @@ func TestInitSetsTheMode(t *testing.T) {
 
 func TestModeCommand(t *testing.T) {
 	dir := isolate(t)
-	if out := cli(t, false, "mode"); !strings.Contains(out, "Mode: observe (the default: no mode set in config.yaml)") {
+	if out := cli(t, false, "mode"); !strings.Contains(out, "Level: observe (the default: no mode set in config.yaml)") {
 		t.Errorf("mode with no config:\n%s", out)
 	}
 	os.WriteFile(filepath.Join(dir, config.GlobalFile), []byte("# mine\nmode: enforce\nobserve_until: 2999-01-01T00:00:00Z\n"), 0o600)
-	if out := cli(t, false, "mode", "status"); !strings.Contains(out, "Mode: observe (observe until 2999-01-01") {
+	if out := cli(t, false, "mode", "status"); !strings.Contains(out, "Level: observe (observe until 2999-01-01") {
 		t.Errorf("mode during observe_until:\n%s", out)
 	}
 	out := cli(t, false, "mode", "enforce")
 	f, _ := readConfig(t, dir)
-	if f.ObserveUntil != nil || !strings.Contains(out, "Mode: enforce (mode: enforce in config.yaml)") {
+	if f.ObserveUntil != nil || *f.Mode != config.ModeGuard || !strings.Contains(out, "Level: guard (mode: guard in config.yaml)") ||
+		!strings.Contains(out, "old name of guard") {
 		t.Errorf("mode enforce: %+v\n%s", f, out)
+	}
+	for _, level := range []string{"notify", "assist", "guard"} {
+		if out := cli(t, false, "mode", level); !strings.Contains(out, "Level: "+level+" (mode: "+level+" in config.yaml)") ||
+			!strings.Contains(out, levelHelp[level]) {
+			t.Errorf("mode %s:\n%s", level, out)
+		}
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, config.GlobalFile)); !strings.Contains(string(b), "# mine") {
 		t.Errorf("comment lost:\n%s", b)
 	}
-	if out := cli(t, false, "mode", "observe"); !strings.Contains(out, "Mode: observe (mode: observe in config.yaml)") {
+	if out := cli(t, false, "mode", "observe"); !strings.Contains(out, "Level: observe (mode: observe in config.yaml)") {
 		t.Errorf("mode observe:\n%s", out)
 	}
 	cli(t, true, "mode", "sometimes")
