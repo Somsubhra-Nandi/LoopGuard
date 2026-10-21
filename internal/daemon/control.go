@@ -97,16 +97,94 @@ func describePause(p store.Pause) string {
 	return s + " until " + p.Until.Local().Format("2006-01-02 15:04")
 }
 
-// sessionMode resolves the mode for one event: the configuration's
-// effective mode (config.yaml, observe_until, the repo's .loopguard.yaml),
-// then pauses, which turn enforce into observe.
+// sessionMode resolves the level for one event: the configuration's
+// (config.yaml, observe_until, the repo's .loopguard.yaml), then pauses,
+// which turn any level above observe into observe.
 func (m *Manager) sessionMode(eff config.Effective, ev *event.Event, repo string, now time.Time) config.ModeInfo {
 	mi := eff.ModeAt(now)
-	if mi.Mode != config.ModeEnforce {
+	if config.LevelRank(mi.Mode) <= config.LevelRank(config.ModeObserve) {
 		return mi
 	}
 	if p, ok := m.pauses.match(ev.SessionID, repo, ev.Cwd, now); ok {
 		return config.ModeInfo{Mode: config.ModeObserve, Why: describePause(p)}
 	}
 	return mi
+}
+
+// allowFor is the strongest action a level lets reach the agent.
+func allowFor(level string) event.Action {
+	switch level {
+	case config.ModeGuard:
+		return event.ActionHalt
+	case config.ModeAssist:
+		return event.ActionNudge
+	}
+	return event.ActionNone
+}
+
+// stopTTL is how long a stop request waits for its session's next event.
+const stopTTL = time.Hour
+
+// stops holds the `loopguard stop` requests, by the agent's session id
+// (so a session's subagent streams are stopped with it). A request stays
+// until the main stream's turn ends (Stop, a human prompt, SessionEnd) or
+// it expires: every halt-capable event of the session gets the halt until
+// then, in case the agent goes on anyway (a late reply is dropped).
+type stops struct {
+	mu   sync.Mutex
+	reqs map[string]*stopReq
+}
+
+type stopReq struct {
+	at       time.Time
+	recorded bool // the halt was recorded as an intervention
+}
+
+func (s *stops) request(sessionID string, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reqs == nil {
+		s.reqs = map[string]*stopReq{}
+	}
+	s.reqs[sessionID] = &stopReq{at: now}
+}
+
+// take reports whether a stop is pending for the session, and whether
+// this is the first halt for it (to be recorded).
+func (s *stops) take(sessionID string, now time.Time) (pending, first bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.reqs[sessionID]
+	if r == nil {
+		return false, false
+	}
+	if now.Sub(r.at) > stopTTL {
+		delete(s.reqs, sessionID)
+		return false, false
+	}
+	first = !r.recorded
+	r.recorded = true
+	return true, first
+}
+
+func (s *stops) pending(sessionID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reqs[sessionID] != nil
+}
+
+func (s *stops) clear(sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.reqs, sessionID)
+}
+
+func (s *stops) expire(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, r := range s.reqs {
+		if now.Sub(r.at) > stopTTL {
+			delete(s.reqs, id)
+		}
+	}
 }

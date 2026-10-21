@@ -19,6 +19,7 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/event"
 	"github.com/Somsubhra-Nandi/loopguard/internal/normalize"
+	"github.com/Somsubhra-Nandi/loopguard/internal/notify"
 	"github.com/Somsubhra-Nandi/loopguard/internal/pipeline"
 	"github.com/Somsubhra-Nandi/loopguard/internal/policy"
 	"github.com/Somsubhra-Nandi/loopguard/internal/redact"
@@ -54,14 +55,16 @@ type job struct {
 // its session's events strictly in order on its own goroutine, so the
 // detectors' state needs no locks, and sessions don't wait on each other.
 type Manager struct {
-	cfg    *config.Loader
-	pauses *pauses
-	st     *store.Store  // nil: memory-only
-	w      *store.Writer // nil: memory-only
-	log    *slog.Logger
-	met    *metrics
-	idle   time.Duration
-	clock  func() time.Time
+	cfg      *config.Loader
+	pauses   *pauses
+	stops    stops
+	notifier *notify.Dispatcher
+	st       *store.Store  // nil: memory-only
+	w        *store.Writer // nil: memory-only
+	log      *slog.Logger
+	met      *metrics
+	idle     time.Duration
+	clock    func() time.Time
 
 	pipesMu sync.Mutex
 	pipes   map[uint64]*pipeline.Pipeline // by config.Effective.Key
@@ -79,7 +82,7 @@ func newManager(cfg *config.Loader, st *store.Store, w *store.Writer, log *slog.
 	if idle <= 0 {
 		idle = DefaultIdle
 	}
-	return &Manager{cfg: cfg, pauses: &pauses{}, st: st, w: w, log: log, met: met, idle: idle, clock: time.Now,
+	return &Manager{cfg: cfg, pauses: &pauses{}, notifier: notify.NewDispatcher(nil, log), st: st, w: w, log: log, met: met, idle: idle, clock: time.Now,
 		pipes: map[uint64]*pipeline.Pipeline{}, actors: map[string]*actor{}, retired: map[string]chan struct{}{}}
 }
 
@@ -219,7 +222,7 @@ func (m *Manager) Close(ctx context.Context) {
 // mode, and the recent interventions (real and would-have) in any mode.
 type liveSummary struct {
 	store.Session
-	Mode          string               `json:"mode,omitempty"`     // observe | enforce | off, at the latest event
+	Mode          string               `json:"mode,omitempty"`     // the level at the latest event: off | observe | notify | assist | guard| enforce | off, at the latest event
 	ModeWhy       string               `json:"mode_why,omitempty"` // why, in words
 	Signals       []store.Signal       `json:"signals,omitempty"`
 	Interventions []store.Intervention `json:"interventions,omitempty"`
@@ -242,16 +245,25 @@ type actor struct {
 
 	loops map[string]bool // loop keys seen, for loops_detected
 	repos map[string]string
+
+	// interactive: the latest event came from a terminal session a human
+	// attends (terminal notifications).
+	interactive bool
+	// announced holds the loops notified as detected (or stalled) in the
+	// turn that started at announcedTurn.
+	announced     map[string]bool
+	announcedTurn uint64
 }
 
 func (m *Manager) newActor(key string, ev *event.Event) *actor {
 	a := &actor{
-		m:     m,
-		key:   key,
-		in:    make(chan job, actorQueue),
-		done:  make(chan struct{}),
-		loops: map[string]bool{},
-		repos: map[string]string{},
+		m:         m,
+		key:       key,
+		in:        make(chan job, actorQueue),
+		done:      make(chan struct{}),
+		loops:     map[string]bool{},
+		repos:     map[string]string{},
+		announced: map[string]bool{},
 	}
 	a.sum.Key, a.sum.Agent, a.sum.SessionID = key, string(ev.Agent), ev.SessionID
 	return a
@@ -371,18 +383,26 @@ func (a *actor) handle(j job) {
 		return
 	}
 
-	a.state.Allow = event.ActionNone
-	if mode.Mode == config.ModeGuard {
-		a.state.Allow = event.ActionHalt
+	a.state.Allow = allowFor(mode.Mode)
+	pipe := a.m.pipeFor(eff)
+	res := pipe.Handle(a.state, ev, a.fileHash(ev))
+	if d, ok := a.stop(pipe, ev, mode); ok {
+		res.Decisions = append(res.Decisions, d)
 	}
-	res := a.m.pipeFor(eff).Handle(a.state, ev, a.fileHash(ev))
-	d := pick(res.Decisions)
-	if a.state.Allow != event.ActionHalt {
-		d = observeOnly(d) // the policy already returns none; belt and braces
+	d := capAction(pick(res.Decisions), a.state.Allow) // the policy already caps; belt and braces
+	a.interactive = ev.Interactive
+	notes := a.notifications(ev, res, mode, eff.Thresholds.Policy.NudgeThreshold)
+	for _, n := range notes {
+		if d.Terminal = a.m.notifier.Terminal(eff.Notify, n, a.interactive); d.Terminal != "" {
+			break
+		}
 	}
 	out, code := j.ad.Render(ev, d)
 	j.reply <- reply{stdout: out, exit: code}
 	replied = true
+	for _, n := range notes {
+		a.m.notifier.Dispatch(eff.Notify, n)
+	}
 
 	if len(res.Decisions) == 0 {
 		a.m.met.decision(string(event.ActionNone))
@@ -421,11 +441,14 @@ func pick(ds []event.Decision) event.Decision {
 	return best
 }
 
-// observeOnly enforces observe mode's invariant: no decision other than
-// "none" reaches the agent, whatever the policy says.
-func observeOnly(d event.Decision) event.Decision {
-	d.Action = event.ActionNone
-	d.Notify = false
+// capAction enforces the level's invariant: no action stronger than the
+// level allows reaches the agent, whatever the policy says (observe and
+// notify: none; assist: nudges). The user's stop and the notes that an
+// earlier stop or block is over are exempt (policy.Exempt).
+func capAction(d event.Decision, allow event.Action) event.Decision {
+	if d.Action.Rank() > allow.Rank() && !policy.Exempt(d) {
+		d.Action = event.ActionNone
+	}
 	return d
 }
 
@@ -647,4 +670,104 @@ func evidenceJSON(e event.Evidence) json.RawMessage {
 		return nil
 	}
 	return b
+}
+
+// stop returns the halt for a pending `loopguard stop` of the event's
+// session (LLD §7.1). A halt can only be given on a pre, post, or batch
+// end; the main stream's turn ending (Stop, a human prompt, SessionEnd)
+// clears the request, as does an observe level (a stop is the user's own
+// request, so it applies at every other level).
+func (a *actor) stop(pipe *pipeline.Pipeline, ev *event.Event, mode config.ModeInfo) (event.Decision, bool) {
+	stops := &a.m.stops
+	if !stops.pending(ev.SessionID) {
+		return event.Decision{}, false
+	}
+	switch ev.Phase {
+	case event.PhasePre, event.PhasePost, event.PhasePostFailure, event.PhaseBatchEnd:
+	case event.PhasePrompt, event.PhaseStop, event.PhaseSessionEnd:
+		if ev.AgentID == "" {
+			stops.clear(ev.SessionID)
+		}
+		return event.Decision{}, false
+	default:
+		return event.Decision{}, false
+	}
+	if config.LevelRank(mode.Mode) <= config.LevelRank(config.ModeObserve) {
+		stops.clear(ev.SessionID)
+		a.m.log.Info("stop request dropped: the session observes", "session", a.key, "why", mode.Why)
+		return event.Decision{}, false
+	}
+	pending, first := stops.take(ev.SessionID, ev.ReceivedAt)
+	if !pending {
+		return event.Decision{}, false
+	}
+	return pipe.Stop(a.state, first), true
+}
+
+// notifications returns what to tell the human about the event (LLD §15),
+// at the notify level and above: a loop of D1-D3 reaching the nudge
+// threshold (loop_detected) or a stall (D5), once per loop per turn, and
+// each nudge, deny, and halt that reached the agent. The user's own stop
+// isn't notified. Rate limits and channel choice are the dispatcher's.
+func (a *actor) notifications(ev *event.Event, res pipeline.Result, mode config.ModeInfo, nudgeAt float64) []notify.Notification {
+	if !config.Notifies(mode.Mode) {
+		return nil
+	}
+	if a.announcedTurn != a.state.TurnSeq {
+		a.announced, a.announcedTurn = map[string]bool{}, a.state.TurnSeq
+	}
+	project := baseName(a.repoOf(ev.Cwd))
+	if project == "" {
+		project = baseName(ev.Cwd)
+	}
+	note := func(kind, key, detector, family string, count int, d time.Duration) notify.Notification {
+		return notify.New(kind, project, a.key, key, detector, family, count, d, ev.ReceivedAt)
+	}
+	var out []notify.Notification
+	for _, sig := range res.Signals {
+		kind := config.EventLoopDetected
+		switch sig.Detector {
+		case event.DetectorStall:
+			kind = config.EventStall
+		case event.DetectorExactRepeat, event.DetectorRepeatedFailure, event.DetectorOscillation:
+		default:
+			continue
+		}
+		if sig.Severity < nudgeAt || a.announced[sig.LoopKey] {
+			continue
+		}
+		a.announced[sig.LoopKey] = true
+		out = append(out, note(kind, sig.LoopKey, sig.Detector, sig.Evidence.Family, sig.Count, sig.Evidence.Elapsed))
+	}
+	for _, d := range res.Decisions {
+		kind := map[event.Action]string{event.ActionNudge: config.EventNudge, event.ActionDeny: config.EventDeny,
+			event.ActionHalt: config.EventHalt}[d.Action]
+		l := a.state.Loops[d.LoopKey]
+		if kind == "" || policy.Exempt(d) || l == nil {
+			continue
+		}
+		if kind == config.EventHalt {
+			// A halted loop keeps halting the agent's further attempts;
+			// the human hears about it once.
+			if a.announced["halt\x00"+d.LoopKey] {
+				continue
+			}
+			a.announced["halt\x00"+d.LoopKey] = true
+		}
+		family := l.Family
+		if family == "" {
+			family = l.Evidence.Family
+		}
+		out = append(out, note(kind, d.LoopKey, d.Detector, family, l.Count, ev.ReceivedAt.Sub(l.StartedAt)))
+	}
+	return out
+}
+
+// baseName is the last element of a path with either separator.
+func baseName(p string) string {
+	p = strings.TrimRight(p, `/\`)
+	if i := strings.LastIndexAny(p, `/\`); i >= 0 {
+		return p[i+1:]
+	}
+	return p
 }

@@ -39,7 +39,8 @@ type output struct {
 //   - halt (pre / post / post_failure / batch_end): continue:false with a
 //     stopReason, and a systemMessage for the user; on a pre, the action
 //     is also denied.
-//   - Notify adds a terminal notification sequence.
+//   - Terminal adds a terminal notification sequence (OSC 777), on any
+//     event, whatever the action.
 //
 // An action that doesn't apply to the event's phase (a deny on a post, a
 // nudge on a pre) renders as none, so a policy bug can't produce output
@@ -82,8 +83,8 @@ func Render(ev *event.Event, d event.Decision) (stdout []byte, exitCode int) {
 			}
 		}
 	}
-	if d.Notify && d.Message != "" {
-		o.TerminalSequence = "\x1b]777;notify;LoopGuard;" + terminalSafe(d.Message) + "\a"
+	if d.Terminal != "" {
+		o.TerminalSequence = "\x1b]777;notify;LoopGuard;" + terminalSafe(d.Terminal) + "\a"
 	}
 	if o == (output{}) {
 		return nil, 0

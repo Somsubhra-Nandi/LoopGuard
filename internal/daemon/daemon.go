@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter"
@@ -22,6 +23,7 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/capture"
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
+	"github.com/Somsubhra-Nandi/loopguard/internal/notify"
 	"github.com/Somsubhra-Nandi/loopguard/internal/proc"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
@@ -47,6 +49,9 @@ type Options struct {
 	// the mode still comes from the config files.
 	Thresholds  *config.Thresholds
 	IdleTimeout time.Duration // actor eviction (0: DefaultIdle)
+	// Senders replaces the notification senders (tests). nil: the real
+	// ones, except in a test binary, where nothing is sent.
+	Senders notify.Senders
 	// Ready, if set, is called once the daemon is listening and daemon.json
 	// is written.
 	Ready func(home.DaemonInfo)
@@ -132,6 +137,7 @@ func Run(ctx context.Context, o Options) error {
 		log:      log,
 		started:  time.Now().UTC(),
 	}
+	d.mgr.notifier = notify.NewDispatcher(senders(o.Senders), log)
 	if st != nil {
 		sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		// Outcomes still open were being tracked by a daemon that is gone.
@@ -186,6 +192,7 @@ func Run(ctx context.Context, o Options) error {
 	defer cancel()
 	_ = srv.Shutdown(sctx)
 	d.mgr.Close(sctx)
+	d.mgr.notifier.Close(sctx)
 	d.close()
 	// Remove daemon.json only if it is still ours.
 	if cur, err := home.ReadDaemonInfo(o.Home); err == nil && cur.PID == info.PID && cur.Port == info.Port {
@@ -196,6 +203,19 @@ func Run(ctx context.Context, o Options) error {
 		err = nil
 	}
 	return err
+}
+
+// senders returns the notification senders: o's, else the real ones. A
+// test binary never sends for real (no desktop pop-ups or network calls
+// from go test), whatever its config says.
+func senders(o notify.Senders) notify.Senders {
+	switch {
+	case o != nil:
+		return o
+	case testing.Testing():
+		return notify.Senders{}
+	}
+	return notify.DefaultSenders()
 }
 
 func logLevel() slog.Level {

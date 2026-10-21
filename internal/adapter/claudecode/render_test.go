@@ -42,8 +42,13 @@ func TestRender(t *testing.T) {
 			want: `{"continue":false,"stopReason":"Stuck on npm test.\nMore","systemMessage":"LoopGuard stopped this turn: Stuck on npm test."}`,
 		},
 		{
-			name: "halt with notify", ev: ev(event.PhasePost), d: event.Decision{Action: event.ActionHalt, Message: "halted\x07now", Reason: "r", Notify: true},
-			want: `{"continue":false,"stopReason":"halted\u0007now","systemMessage":"LoopGuard stopped this turn: r","terminalSequence":"\u001b]777;notify;LoopGuard;halted now\u0007"}`,
+			name: "halt with notify", ev: ev(event.PhasePost), d: event.Decision{Action: event.ActionHalt, Message: "halted", Reason: "r", Terminal: "shop:\x07 loop"},
+			want: `{"continue":false,"stopReason":"halted","systemMessage":"LoopGuard stopped this turn: r","terminalSequence":"\u001b]777;notify;LoopGuard;shop:  loop\u0007"}`,
+		},
+		{
+			// notify level: the agent gets nothing, the terminal a notification.
+			name: "notification alone", ev: ev(event.PhasePost), d: event.Decision{Action: event.ActionNone, Terminal: "loop in shop"},
+			want: `{"terminalSequence":"\u001b]777;notify;LoopGuard;loop in shop\u0007"}`,
 		},
 		// Actions that don't apply to the phase render as none.
 		{name: "deny on post", ev: ev(event.PhasePost), d: event.Decision{Action: event.ActionDeny, Message: msg}, empty: true},

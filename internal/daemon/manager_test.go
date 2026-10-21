@@ -17,6 +17,7 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter/claudecode"
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/event"
+	"github.com/Somsubhra-Nandi/loopguard/internal/policy"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
 
@@ -218,16 +219,26 @@ func TestSubagentsAreSeparateSessions(t *testing.T) {
 	}
 }
 
-func TestObserveOnly(t *testing.T) {
+func TestCapAction(t *testing.T) {
 	for _, a := range []event.Action{event.ActionNudge, event.ActionDeny, event.ActionHalt} {
-		d := observeOnly(pick([]event.Decision{{Action: event.ActionNone}, {Action: a, Message: "m", Notify: true}}))
-		if d.Action != event.ActionNone || d.Notify {
-			t.Errorf("observeOnly let %s through: %+v", a, d)
+		d := capAction(pick([]event.Decision{{Action: event.ActionNone}, {Action: a, Message: "m", LoopKey: "rf:x"}}), event.ActionNone)
+		if d.Action != event.ActionNone || d.Terminal != "" {
+			t.Errorf("observe let %s through: %+v", a, d)
 		}
 		for _, p := range []event.Phase{event.PhasePre, event.PhasePost, event.PhasePostFailure, event.PhaseBatchEnd} {
 			if out, code := claudecode.Render(&event.Event{Phase: p}, d); out != nil || code != 0 {
-				t.Errorf("observe-mode %s on %s rendered %s", a, p, out)
+				t.Errorf("observe-level %s on %s rendered %s", a, p, out)
 			}
+		}
+		// assist lets nudges through, nothing stronger.
+		if d := capAction(event.Decision{Action: a, LoopKey: "rf:x"}, event.ActionNudge); (d.Action == event.ActionNone) != (a != event.ActionNudge) {
+			t.Errorf("assist: %s became %s", a, d.Action)
+		}
+	}
+	// The user's stop and the notes after it go through at any level.
+	for _, d := range []event.Decision{{Action: event.ActionHalt, LoopKey: policy.StopKey}, {Action: event.ActionNudge, LoopKey: policy.NoteKey}} {
+		if got := capAction(d, event.ActionNone); got.Action != d.Action {
+			t.Errorf("%s was capped to %s", d.LoopKey, got.Action)
 		}
 	}
 	if d := pick(nil); d.Action != event.ActionNone {

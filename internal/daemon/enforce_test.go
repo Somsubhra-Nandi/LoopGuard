@@ -100,6 +100,7 @@ func replyKind(t *testing.T, r EventReply) string {
 	var o struct {
 		Continue           *bool  `json:"continue"`
 		StopReason         string `json:"stopReason"`
+		TerminalSequence   string `json:"terminalSequence"`
 		HookSpecificOutput *struct {
 			HookEventName      string `json:"hookEventName"`
 			AdditionalContext  string `json:"additionalContext"`
@@ -119,6 +120,8 @@ func replyKind(t *testing.T, r EventReply) string {
 		return "deny"
 	case h != nil && h.AdditionalContext != "":
 		return "nudge"
+	case o.TerminalSequence != "" && h == nil && o.Continue == nil:
+		return "none" // a notification for the human only
 	}
 	t.Fatalf("unrecognized reply %s", r.Stdout)
 	return ""
@@ -167,7 +170,7 @@ func TestEnforceNudgeDenyHalt(t *testing.T) {
 	s.edit("src/cart.ts")
 	_, post := s.bash("npm test", npmFailure)
 	if replyKind(t, post) != "nudge" || !strings.Contains(post.Stdout, `"hookEventName":"PostToolUseFailure"`) ||
-		!strings.Contains(post.Stdout, "has failed 4 times") || !strings.Contains(post.Stdout, `Expected: 110\n  Received: 100\n`) ||
+		!strings.Contains(post.Stdout, "has failed 4 times in a row") || !strings.Contains(post.Stdout, `Output excerpt:\n    expect(received).toBe(expected)\n    Expected: 110\n    Received: 100\n`) ||
 		strings.Contains(post.Stdout, "FAIL src/cart.test.ts") ||
 		!strings.Contains(post.Stdout, "these files were edited: src/cart.ts.") {
 		t.Fatalf("4th failure: %s", post.Stdout)
@@ -353,24 +356,48 @@ func gitRepo(t *testing.T, repoCfg string) string {
 	return dir
 }
 
-func TestRepoFileCannotLoosen(t *testing.T) {
-	t.Run("can't turn enforcement on", func(t *testing.T) {
+// firstOf runs attempts and returns the attempt number at which the pre
+// or post reply was each kind first (0: never).
+func firstOf(s *scenario, n int) map[string]int {
+	at := map[string]int{}
+	for i := 1; i <= n; i++ {
+		pre, post := s.attempt()
+		for _, k := range []string{pre, post} {
+			if at[k] == 0 {
+				at[k] = i
+			}
+		}
+	}
+	return at
+}
+
+func TestRepoFileOnlyRaisesTheLevel(t *testing.T) {
+	t.Run("raises observe to guard", func(t *testing.T) {
 		d := startDaemon(t, homeWithConfig(t, ""), nil)
 		s := newScenario(d, "r1")
-		s.cwd = gitRepo(t, "mode: enforce\npolicy: { nudge_threshold: 0.1 }\n")
+		s.cwd = gitRepo(t, "mode: guard\n")
 		s.prompt("go")
-		for i := 1; i <= 11; i++ {
-			if pre, post := s.attempt(); pre != "none" || post != "none" {
-				t.Fatalf("attempt %d: %s/%s, want none", i, pre, post)
+		if at := firstOf(s, 11); at["nudge"] != 4 || at["deny"] == 0 {
+			t.Errorf("first nudge, deny at %v; want the repo's guard level", at)
+		}
+	})
+	t.Run("can't lower guard", func(t *testing.T) {
+		d := startDaemon(t, homeWithConfig(t, "mode: enforce\n"), nil)
+		for i, repoCfg := range []string{"mode: observe\n", "mode: assist\n", "enabled: false\n"} {
+			s := newScenario(d, fmt.Sprintf("r2-%d", i))
+			s.cwd = gitRepo(t, repoCfg)
+			s.prompt("go")
+			if at := firstOf(s, 11); at["nudge"] != 4 || at["deny"] == 0 {
+				t.Errorf("%q: first nudge, deny at %v; want guard (config.yaml) to stay", repoCfg, at)
 			}
 		}
 	})
 	t.Run("can't raise thresholds, can lower them", func(t *testing.T) {
 		d := startDaemon(t, homeWithConfig(t, "mode: enforce\n"), nil)
-		high := newScenario(d, "r2")
+		high := newScenario(d, "r3")
 		high.cwd = gitRepo(t, "detectors: { repeated_failure: { min_count: 50 } }\n")
 		high.prompt("go")
-		low := newScenario(d, "r3")
+		low := newScenario(d, "r4")
 		low.cwd = gitRepo(t, "detectors: { repeated_failure: { min_count: 2 } }\n")
 		low.prompt("go")
 		var highAt, lowAt int
@@ -386,21 +413,51 @@ func TestRepoFileCannotLoosen(t *testing.T) {
 			t.Errorf("first nudge at attempt %d (min_count 50 in the repo) and %d (min_count 2); want 4 and 2", highAt, lowAt)
 		}
 	})
-	t.Run("enabled: false turns it off", func(t *testing.T) {
-		d := startDaemon(t, homeWithConfig(t, "mode: enforce\n"), nil)
-		s := newScenario(d, "r4")
-		s.cwd = gitRepo(t, "enabled: false\n")
+	t.Run("enabled: false in config.yaml turns it off", func(t *testing.T) {
+		d := startDaemon(t, homeWithConfig(t, "mode: guard\nenabled: false\n"), nil)
+		s := newScenario(d, "r5")
 		s.prompt("go")
-		for i := 1; i <= 11; i++ {
-			if pre, post := s.attempt(); pre != "none" || post != "none" {
-				t.Fatalf("attempt %d: %s/%s, want none", i, pre, post)
-			}
+		if at := firstOf(s, 11); len(at) != 1 || at["none"] != 1 {
+			t.Errorf("replies %v, want none only", at)
 		}
 		// Nothing about the session is stored.
-		if code, b := d.do("GET", "/v1/sessions/claude-code:r4", nil, nil); code != 404 {
-			t.Errorf("a disabled repo's session was recorded: %d %s", code, b)
+		if code, b := d.do("GET", "/v1/sessions/claude-code:r5", nil, nil); code != 404 {
+			t.Errorf("a disabled session was recorded: %d %s", code, b)
 		}
 	})
+}
+
+func TestLevels(t *testing.T) {
+	for _, tt := range []struct {
+		level       string
+		nudge, deny bool
+	}{
+		{"observe", false, false},
+		{"notify", false, false},
+		{"assist", true, false},
+		{"guard", true, true},
+	} {
+		t.Run(tt.level, func(t *testing.T) {
+			d := startDaemon(t, homeWithConfig(t, "mode: "+tt.level+"\n"), nil)
+			s := newScenario(d, "lv-"+tt.level)
+			s.prompt("go")
+			at := firstOf(s, 14)
+			if (at["nudge"] != 0) != tt.nudge || (at["deny"] != 0) != tt.deny || (at["halt"] != 0) != tt.deny {
+				t.Errorf("replies first at %v; want nudge %v, deny and halt %v", at, tt.nudge, tt.deny)
+			}
+			// Every level but guard still records what guard would do.
+			actions := map[string]string{}
+			for _, x := range d.interventions(t, "claude-code:lv-"+tt.level) {
+				actions[x.Action] = x.Mode
+			}
+			if actions["nudge"] == "" || actions["deny"] == "" || actions["halt"] == "" {
+				t.Errorf("recorded %v, want nudge, deny, and halt", actions)
+			}
+			if tt.level == "assist" && (actions["nudge"] != store.ModeEnforce || actions["deny"] != store.ModeObserve) {
+				t.Errorf("assist recorded %v: want a real nudge, a would-have deny", actions)
+			}
+		})
+	}
 }
 
 func TestSubagentLoopNeverHaltsTheParent(t *testing.T) {

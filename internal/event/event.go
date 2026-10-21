@@ -213,10 +213,12 @@ func (a Action) Rank() int {
 // why; Action is that action when the session's level allows it (assist:
 // nudges only; observe and notify: nothing), else ActionNone.
 type Decision struct {
-	Action    Action
-	LoopKey   string
-	Message   string // text for the agent (nudge/deny) or the human (halt stopReason)
-	Notify    bool
+	Action  Action
+	LoopKey string
+	Message string // text for the agent (nudge/deny) or the human (halt stopReason)
+	// Terminal, if set, is a notification for the human's terminal, sent
+	// with the hook reply (interactive sessions only; LLD §15).
+	Terminal  string
 	WouldHave Action  // the action the guard level takes
 	Reason    string  // why, in one line
 	Detector  string  // detector behind the loop

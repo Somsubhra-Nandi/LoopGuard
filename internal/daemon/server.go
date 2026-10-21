@@ -83,6 +83,7 @@ func (d *server) janitor(ctx context.Context) {
 			return
 		case <-t.C:
 			d.mgr.evictIdle()
+			d.mgr.stops.expire(time.Now())
 			if err := d.mgr.pauses.load(ctx, d.st, time.Now()); err != nil && ctx.Err() == nil {
 				d.log.Warn("reloading pauses", "err", err)
 			}
@@ -117,6 +118,7 @@ func (d *server) routes() http.Handler {
 	mux.Handle("GET /v1/decisions", d.auth(d.decisions))
 	mux.Handle("GET /v1/pauses", d.auth(d.listPauses))
 	mux.Handle("POST /v1/pauses/reload", d.auth(d.reloadPauses))
+	mux.Handle("POST /v1/stop", d.auth(d.stop))
 	mux.Handle("GET /metrics", d.auth(d.metrics))
 	mux.Handle("POST /v1/shutdown", d.auth(d.shutdownHandler))
 	return d.hostCheck(mux)
@@ -212,6 +214,7 @@ func (d *server) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.met.event(agent, string(ev.Phase))
+	ev.Interactive = interactive(r.URL.Query())
 
 	ch := d.mgr.Submit(ev, ad)
 	if ch == nil {

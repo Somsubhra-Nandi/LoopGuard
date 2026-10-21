@@ -27,6 +27,8 @@ type testDaemon struct {
 	info  home.DaemonInfo
 	token string
 	stop  func() error
+	// query is added to /v1/events requests (e.g. "&entry=cli").
+	query string
 }
 
 func startDaemon(t *testing.T, dir string, mod func(*Options)) *testDaemon {
@@ -97,7 +99,7 @@ func (d *testDaemon) do(method, path string, body []byte, hdr map[string]string)
 
 func (d *testDaemon) event(payload string) EventReply {
 	d.t.Helper()
-	code, b := d.do("POST", "/v1/events?agent=claude-code", []byte(payload), nil)
+	code, b := d.do("POST", "/v1/events?agent=claude-code"+d.query, []byte(payload), nil)
 	if code != http.StatusOK {
 		d.t.Fatalf("POST /v1/events: %d %s", code, b)
 	}
