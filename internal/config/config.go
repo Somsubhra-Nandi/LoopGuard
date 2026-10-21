@@ -28,11 +28,14 @@ type Config struct {
 	Thresholds Thresholds
 	// Notify is global only (config.yaml).
 	Notify Notify
+	// Budgets are the D6 limits (LLD §6); a repo file may only set or
+	// lower them.
+	Budgets Budgets
 }
 
 // Defaults returns the configuration with no files.
 func Defaults() Config {
-	return Config{ObserveDaysAfterInstall: 3, Enabled: true, Thresholds: Default(), Notify: DefaultNotify()}
+	return Config{ObserveDaysAfterInstall: 3, Enabled: true, Thresholds: Default(), Notify: DefaultNotify(), Budgets: DefaultBudgets()}
 }
 
 // Apply overrides c with every key set in f (the global config.yaml,
@@ -42,6 +45,7 @@ func (c Config) Apply(f File, source string) Config {
 		c.Mode, c.ModeSource, c.ModeWritten = CanonicalMode(*f.Mode), source, *f.Mode
 	}
 	c.Notify = c.Notify.apply(f.Notify)
+	c.Budgets = c.Budgets.apply(f.Budgets)
 	if f.ObserveUntil != nil {
 		c.ObserveUntil = *f.ObserveUntil
 	}
@@ -150,6 +154,7 @@ func (c Config) Tighten(f File, source string) (Config, []string) {
 	if f.ObserveUntil != nil {
 		ignore("observe_until", globalOnly)
 	}
+	c.Budgets = c.Budgets.tighten(f.Budgets, ignore)
 	if f.ObserveDaysAfterInstall != nil {
 		ignore("observe_days_after_install", globalOnly)
 	}

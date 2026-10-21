@@ -51,9 +51,10 @@ type File struct {
 
 	Notify *NotifyFile `yaml:"notify"`
 
-	// Read in later milestones (M4: budgets; retention); accepted now so a
-	// config written from LLD §12 is valid.
-	Budgets map[string]any `yaml:"budgets"`
+	Budgets *BudgetsFile `yaml:"budgets"`
+
+	// Read in a later milestone (retention); accepted now so a config
+	// written from LLD §12 is valid.
 	Privacy map[string]any `yaml:"privacy"`
 }
 
@@ -132,6 +133,7 @@ func (f File) Validate() error {
 		bad("mode: %q is not observe, notify, assist, or guard", *f.Mode)
 	}
 	f.Notify.validate(bad)
+	f.Budgets.validate(bad)
 	if v := f.ObserveDaysAfterInstall; v != nil && *v < 0 {
 		bad("observe_days_after_install: %d is negative", *v)
 	}
