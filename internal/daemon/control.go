@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"log/slog"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -130,9 +131,48 @@ const stopTTL = time.Hour
 // until the main stream's turn ends (Stop, a human prompt, SessionEnd) or
 // it expires: every halt-capable event of the session gets the halt until
 // then, in case the agent goes on anyway (a late reply is dropped).
+//
+// The requests are also kept in the store (stop_requests), so a daemon
+// restart doesn't lose one: load reads them back at start.
 type stops struct {
 	mu   sync.Mutex
 	reqs map[string]*stopReq
+
+	st  *store.Store // nil: memory only
+	log *slog.Logger
+}
+
+// persist runs a store write for the requests; a failure is logged (the
+// request still works until a restart).
+func (s *stops) persist(what string, f func(ctx context.Context, st *store.Store) error) {
+	if s.st == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := f(ctx, s.st); err != nil && s.log != nil {
+		s.log.Warn("stop request: "+what, "err", err)
+	}
+}
+
+// load reads the stored requests not yet expired at now.
+func (s *stops) load(ctx context.Context, now time.Time) error {
+	if s.st == nil {
+		return nil
+	}
+	rs, err := s.st.StopRequests(ctx, now.Add(-stopTTL))
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reqs == nil {
+		s.reqs = map[string]*stopReq{}
+	}
+	for _, r := range rs {
+		s.reqs[r.SessionID] = &stopReq{at: r.RequestedAt, recorded: r.Recorded}
+	}
+	return nil
 }
 
 type stopReq struct {
@@ -142,11 +182,14 @@ type stopReq struct {
 
 func (s *stops) request(sessionID string, now time.Time) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.reqs == nil {
 		s.reqs = map[string]*stopReq{}
 	}
 	s.reqs[sessionID] = &stopReq{at: now}
+	s.mu.Unlock()
+	s.persist("saving", func(ctx context.Context, st *store.Store) error {
+		return st.SetStopRequest(ctx, store.StopRequest{SessionID: sessionID, RequestedAt: now})
+	})
 }
 
 // take reports whether a stop is pending for the session, and whether
@@ -164,6 +207,13 @@ func (s *stops) take(sessionID string, now time.Time) (pending, first bool) {
 	}
 	first = !r.recorded
 	r.recorded = true
+	if first {
+		at := r.at
+		// Off the hook path, like clear.
+		go s.persist("marking recorded", func(ctx context.Context, st *store.Store) error {
+			return st.SetStopRequest(ctx, store.StopRequest{SessionID: sessionID, RequestedAt: at, Recorded: true})
+		})
+	}
 	return true, first
 }
 
@@ -175,16 +225,26 @@ func (s *stops) pending(sessionID string) bool {
 
 func (s *stops) clear(sessionID string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	_, had := s.reqs[sessionID]
 	delete(s.reqs, sessionID)
+	s.mu.Unlock()
+	if had {
+		// Off the hook path: a store write can wait on a lock.
+		go s.persist("deleting", func(ctx context.Context, st *store.Store) error { return st.DeleteStopRequest(ctx, sessionID) })
+	}
 }
 
 func (s *stops) expire(now time.Time) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var gone []string
 	for id, r := range s.reqs {
 		if now.Sub(r.at) > stopTTL {
 			delete(s.reqs, id)
+			gone = append(gone, id)
 		}
+	}
+	s.mu.Unlock()
+	for _, id := range gone {
+		s.persist("deleting", func(ctx context.Context, st *store.Store) error { return st.DeleteStopRequest(ctx, id) })
 	}
 }

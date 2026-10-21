@@ -17,6 +17,7 @@ import (
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter"
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
+	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
 	"github.com/Somsubhra-Nandi/loopguard/internal/event"
 	"github.com/Somsubhra-Nandi/loopguard/internal/normalize"
 	"github.com/Somsubhra-Nandi/loopguard/internal/notify"
@@ -58,6 +59,8 @@ type Manager struct {
 	cfg      *config.Loader
 	pauses   *pauses
 	stops    stops
+	book     *usageBook // usage, tool calls, and wall time for the budgets (D6)
+	tails    tails
 	notifier *notify.Dispatcher
 	st       *store.Store  // nil: memory-only
 	w        *store.Writer // nil: memory-only
@@ -82,8 +85,12 @@ func newManager(cfg *config.Loader, st *store.Store, w *store.Writer, log *slog.
 	if idle <= 0 {
 		idle = DefaultIdle
 	}
-	return &Manager{cfg: cfg, pauses: &pauses{}, notifier: notify.NewDispatcher(nil, log), st: st, w: w, log: log, met: met, idle: idle, clock: time.Now,
+	m := &Manager{cfg: cfg, pauses: &pauses{}, notifier: notify.NewDispatcher(nil, log), st: st, w: w, log: log, met: met, idle: idle, clock: time.Now,
 		pipes: map[uint64]*pipeline.Pipeline{}, actors: map[string]*actor{}, retired: map[string]chan struct{}{}}
+	m.book = newUsageBook(st, cost.NewPricingLoader(filepath.Dir(cfg.GlobalPath())), log)
+	m.tails.m = m
+	m.stops.st, m.stops.log = st, log
+	return m
 }
 
 // pipeFor returns the pipeline for a configuration. Pipelines hold no
@@ -253,17 +260,21 @@ type actor struct {
 	// turn that started at announcedTurn.
 	announced     map[string]bool
 	announcedTurn uint64
+	// budgetTurn holds, per budget period, TurnSeq+1 of the turn whose hard
+	// budget halt was recorded.
+	budgetTurn map[string]uint64
 }
 
 func (m *Manager) newActor(key string, ev *event.Event) *actor {
 	a := &actor{
-		m:         m,
-		key:       key,
-		in:        make(chan job, actorQueue),
-		done:      make(chan struct{}),
-		loops:     map[string]bool{},
-		repos:     map[string]string{},
-		announced: map[string]bool{},
+		m:          m,
+		key:        key,
+		in:         make(chan job, actorQueue),
+		done:       make(chan struct{}),
+		loops:      map[string]bool{},
+		repos:      map[string]string{},
+		announced:  map[string]bool{},
+		budgetTurn: map[string]uint64{},
 	}
 	a.sum.Key, a.sum.Agent, a.sum.SessionID = key, string(ev.Agent), ev.SessionID
 	return a
@@ -386,12 +397,17 @@ func (a *actor) handle(j job) {
 	a.state.Allow = allowFor(mode.Mode)
 	pipe := a.m.pipeFor(eff)
 	res := pipe.Handle(a.state, ev, a.fileHash(ev))
+	a.m.book.event(ev.SessionID, a.key, repo, ev.ReceivedAt, res.Call != nil)
+	a.m.tails.register(ev.SessionID, string(ev.Agent), ev.Transcript, repo, ev.ReceivedAt, ev.Phase == event.PhaseSessionEnd && ev.AgentID == "")
 	if d, ok := a.stop(pipe, ev, mode); ok {
 		res.Decisions = append(res.Decisions, d)
 	}
+	budgetDs, budgetNotes := a.budget(pipe, ev, eff, mode, repo)
+	res.Decisions = append(res.Decisions, budgetDs...)
 	d := capAction(pick(res.Decisions), a.state.Allow) // the policy already caps; belt and braces
 	a.interactive = ev.Interactive
 	notes := a.notifications(ev, res, mode, eff.Thresholds.Policy.NudgeThreshold)
+	notes = append(notes, budgetNotes...)
 	for _, n := range notes {
 		if d.Terminal = a.m.notifier.Terminal(eff.Notify, n, a.interactive); d.Terminal != "" {
 			break

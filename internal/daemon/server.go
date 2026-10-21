@@ -84,6 +84,7 @@ func (d *server) janitor(ctx context.Context) {
 		case <-t.C:
 			d.mgr.evictIdle()
 			d.mgr.stops.expire(time.Now())
+			d.mgr.book.prune(time.Now())
 			if err := d.mgr.pauses.load(ctx, d.st, time.Now()); err != nil && ctx.Err() == nil {
 				d.log.Warn("reloading pauses", "err", err)
 			}
@@ -119,6 +120,7 @@ func (d *server) routes() http.Handler {
 	mux.Handle("GET /v1/pauses", d.auth(d.listPauses))
 	mux.Handle("POST /v1/pauses/reload", d.auth(d.reloadPauses))
 	mux.Handle("POST /v1/stop", d.auth(d.stop))
+	mux.Handle("GET /v1/usage", d.auth(d.usage))
 	mux.Handle("GET /metrics", d.auth(d.metrics))
 	mux.Handle("POST /v1/shutdown", d.auth(d.shutdownHandler))
 	return d.hostCheck(mux)
@@ -416,4 +418,35 @@ func (d *server) decisions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"decisions": nonNil(out), "store": d.storeMode()})
+}
+
+// tailLoop reads the active sessions' transcripts for usage every
+// interval (LLD §8.1).
+func (d *server) tailLoop(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			d.mgr.tails.pollAll(time.Now())
+		}
+	}
+}
+
+// usage returns today's usage, the live sessions', and the budgets of
+// config.yaml (`loopguard status`).
+func (d *server) usage(w http.ResponseWriter, _ *http.Request) {
+	ids := map[string]bool{}
+	for _, s := range d.mgr.Live() {
+		ids[s.SessionID] = true
+	}
+	list := make([]string, 0, len(ids))
+	for id := range ids {
+		list = append(list, id)
+	}
+	r := d.mgr.book.reply(list, time.Now())
+	r.Budgets = d.mgr.cfg.For("").Budgets
+	writeJSON(w, http.StatusOK, r)
 }

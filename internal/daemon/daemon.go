@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -22,6 +23,7 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter/claudecode"
 	"github.com/Somsubhra-Nandi/loopguard/internal/capture"
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
+	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
 	"github.com/Somsubhra-Nandi/loopguard/internal/notify"
 	"github.com/Somsubhra-Nandi/loopguard/internal/proc"
@@ -49,6 +51,9 @@ type Options struct {
 	// the mode still comes from the config files.
 	Thresholds  *config.Thresholds
 	IdleTimeout time.Duration // actor eviction (0: DefaultIdle)
+	// TailEvery is how often active sessions' transcripts are read for usage
+	// (0: DefaultTailEvery; negative: never, for tests that poll by hand).
+	TailEvery time.Duration
 	// Senders replaces the notification senders (tests). nil: the real
 	// ones, except in a test binary, where nothing is sent.
 	Senders notify.Senders
@@ -138,6 +143,11 @@ func Run(ctx context.Context, o Options) error {
 		started:  time.Now().UTC(),
 	}
 	d.mgr.notifier = notify.NewDispatcher(senders(o.Senders), log)
+	// pricing.yaml: the shipped table, written once so the user can edit it.
+	if _, err := cost.EnsurePricing(o.Home); err != nil {
+		log.Warn("writing pricing.yaml", "err", err)
+	}
+	d.mgr.book.pricing.OnError = func(err error) { log.Warn("pricing.yaml is invalid; using the shipped prices", "err", err) }
 	if st != nil {
 		sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		// Outcomes still open were being tracked by a daemon that is gone.
@@ -149,6 +159,10 @@ func Run(ctx context.Context, o Options) error {
 		if err := d.mgr.pauses.load(sctx, st, time.Now()); err != nil {
 			log.Warn("loading pauses", "err", err)
 		}
+		if err := d.mgr.stops.load(sctx, time.Now()); err != nil {
+			log.Warn("loading stop requests", "err", err)
+		}
+		d.mgr.book.loadAnnounced(sctx, time.Now())
 		cancel()
 	}
 	uh, _ := os.UserHomeDir()
@@ -182,6 +196,9 @@ func Run(ctx context.Context, o Options) error {
 	}
 
 	go d.janitor(ctx)
+	if o.TailEvery >= 0 {
+		go d.tailLoop(ctx, cmp.Or(o.TailEvery, DefaultTailEvery))
+	}
 	select {
 	case <-ctx.Done():
 	case err = <-serveErr:
