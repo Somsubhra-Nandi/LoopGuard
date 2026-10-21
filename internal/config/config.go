@@ -10,11 +10,13 @@ import (
 // Config is the configuration in effect: the defaults, overridden by
 // config.yaml, then tightened by a repo's .loopguard.yaml (LLD §12).
 type Config struct {
-	// Mode is "observe", "enforce", or "" when no file sets it (which
-	// means observe: LoopGuard never enforces unless told to).
+	// Mode is the level: "observe", "notify", "assist", "guard", or "" when
+	// no file sets it (which means observe: LoopGuard never acts unless
+	// told to). "enforce" in a file is read as guard.
 	Mode string
-	// ModeSource names the file that set Mode ("" for the default).
-	ModeSource string
+	// ModeSource names the file that set Mode ("" for the default), and
+	// ModeWritten is the value as written there (e.g. "enforce").
+	ModeSource, ModeWritten string
 	// ObserveUntil keeps a new install in observe mode until this time,
 	// even with mode: enforce (TDD D-8). Zero: no grace period.
 	ObserveUntil            time.Time
@@ -24,19 +26,22 @@ type Config struct {
 	Enabled    bool
 	DisabledBy string
 	Thresholds Thresholds
+	// Notify is global only (config.yaml).
+	Notify Notify
 }
 
 // Defaults returns the configuration with no files.
 func Defaults() Config {
-	return Config{ObserveDaysAfterInstall: 3, Enabled: true, Thresholds: Default()}
+	return Config{ObserveDaysAfterInstall: 3, Enabled: true, Thresholds: Default(), Notify: DefaultNotify()}
 }
 
 // Apply overrides c with every key set in f (the global config.yaml,
 // named source in explanations).
 func (c Config) Apply(f File, source string) Config {
 	if f.Mode != nil {
-		c.Mode, c.ModeSource = *f.Mode, source
+		c.Mode, c.ModeSource, c.ModeWritten = CanonicalMode(*f.Mode), source, *f.Mode
 	}
+	c.Notify = c.Notify.apply(f.Notify)
 	if f.ObserveUntil != nil {
 		c.ObserveUntil = *f.ObserveUntil
 	}
@@ -115,31 +120,31 @@ func (c Config) Apply(f File, source string) Config {
 }
 
 // Tighten applies a repo's .loopguard.yaml (named source) to c. A repo
-// file is usually committed by someone else, so it may only make LoopGuard
-// stricter or quieter, never more permissive than the user's own config:
+// file may make LoopGuard more protective for the repo, never less than
+// the user's own config:
 //
-//   - enabled: false turns LoopGuard off for the repo;
-//   - mode: observe turns enforcement off (mode: enforce is ignored);
+//   - mode raises the level (observe < notify < assist < guard); a lower
+//     level is ignored, and so is enabled: false (pause the repo instead);
 //   - a detector's enabled: false turns it off (true is ignored);
 //   - the occurrence and severity thresholds below are used only when
 //     lower than the global value.
 //
-// Everything else (windows, reset rules, command lists, observe_until) is
-// global only. Each ignored key is returned as a note.
+// Everything else (windows, reset rules, command lists, observe_until,
+// notify) is global only. Each ignored key is returned as a note.
 func (c Config) Tighten(f File, source string) (Config, []string) {
 	var notes []string
 	ignore := func(key, why string) { notes = append(notes, fmt.Sprintf("%s: %s ignored: %s", source, key, why)) }
 	const globalOnly = "only config.yaml can set it"
 
-	if f.Enabled != nil && !*f.Enabled {
-		c.Enabled, c.DisabledBy = false, source
+	if f.Enabled != nil && !*f.Enabled && c.Enabled {
+		ignore("enabled: false", "a repo file can't lower the level (to pause LoopGuard here: loopguard pause --repo)")
 	}
 	if f.Mode != nil {
-		switch {
-		case *f.Mode == ModeObserve:
-			c.Mode, c.ModeSource = ModeObserve, source
-		case c.Mode != ModeEnforce:
-			ignore("mode: enforce", "a repo file can't turn enforcement on")
+		switch global := c.Mode; {
+		case LevelRank(*f.Mode) > LevelRank(global):
+			c.Mode, c.ModeSource, c.ModeWritten = CanonicalMode(*f.Mode), source, *f.Mode
+		case LevelRank(*f.Mode) < LevelRank(global):
+			ignore(modeText(*f.Mode), "a repo file can't lower the level (config.yaml: "+CanonicalMode(global)+")")
 		}
 	}
 	if f.ObserveUntil != nil {
@@ -253,29 +258,33 @@ func (c Config) Tighten(f File, source string) (Config, []string) {
 	return c, notes
 }
 
-// ModeInfo is the mode in effect and why, in words for doctor and status.
+// ModeInfo is the level in effect and why, in words for doctor and status.
 type ModeInfo struct {
-	Mode string `json:"mode"` // observe | enforce | off
+	Mode string `json:"mode"` // off | observe | notify | assist | guard
 	Why  string `json:"why"`
 }
 
-// ModeOff is the effective mode when a file turns LoopGuard off.
+// ModeOff is the effective level when config.yaml turns LoopGuard off.
 const ModeOff = "off"
 
-// EffectiveMode resolves c's mode at now: off when disabled; enforce only
-// when a file says so and any observe_until grace period has passed;
-// observe otherwise.
+// EffectiveMode resolves c's level at now: off when disabled; the level a
+// file sets (the higher of config.yaml and the repo file) once any
+// observe_until grace period has passed; observe otherwise.
 func (c Config) EffectiveMode(now time.Time) ModeInfo {
+	written := c.ModeWritten
+	if written == "" {
+		written = c.Mode
+	}
 	switch {
 	case !c.Enabled:
 		return ModeInfo{ModeOff, "enabled: false in " + c.DisabledBy}
 	case c.Mode == "":
 		return ModeInfo{ModeObserve, "the default: no mode set in " + GlobalFile}
 	case c.Mode == ModeObserve:
-		return ModeInfo{ModeObserve, "mode: observe in " + c.ModeSource}
+		return ModeInfo{ModeObserve, modeText(written) + " in " + c.ModeSource}
 	case now.Before(c.ObserveUntil):
 		return ModeInfo{ModeObserve, "observe until " + c.ObserveUntil.Local().Format("2006-01-02 15:04") +
-			" after a new install, then enforce"}
+			" after a new install, then " + c.Mode}
 	}
-	return ModeInfo{ModeEnforce, "mode: enforce in " + c.ModeSource}
+	return ModeInfo{c.Mode, modeText(written) + " in " + c.ModeSource}
 }

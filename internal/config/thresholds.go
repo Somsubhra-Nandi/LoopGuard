@@ -41,8 +41,8 @@ type DetectorThresholds struct {
 	ExactRepeat     ExactRepeat
 	RepeatedFailure RepeatedFailure
 	Oscillation     Oscillation
-	ReadThrash      ReadThrash // TODO(M3): D4 is not implemented yet.
-	Stall           Stall      // TODO(M3): D5 is not implemented yet.
+	ReadThrash      ReadThrash
+	Stall           Stall
 }
 
 // ExactRepeat configures D1.

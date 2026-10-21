@@ -17,9 +17,14 @@ const (
 	RepoFile   = ".loopguard.yaml" // at a repo's git root
 )
 
-// Modes.
+// Levels (the mode key), least to most protective after off (LLD §12).
 const (
-	ModeObserve = "observe"
+	ModeObserve = "observe" // record only
+	ModeNotify  = "notify"  // notify the user; never touch the agent
+	ModeAssist  = "assist"  // notify and nudge; never deny or halt
+	ModeGuard   = "guard"   // nudge, deny, halt, and notify
+	// ModeEnforce is the old name of guard (M3-A), still accepted in files
+	// and by `loopguard mode`.
 	ModeEnforce = "enforce"
 )
 
@@ -44,10 +49,11 @@ type File struct {
 	// SlowFamilies never halt on time. A repo file may add to the list.
 	SlowFamilies *[]string `yaml:"slow_families"`
 
-	// Read in later milestones (M4: budgets; notifications; retention);
-	// accepted now so a config written from LLD §12 is valid.
+	Notify *NotifyFile `yaml:"notify"`
+
+	// Read in later milestones (M4: budgets; retention); accepted now so a
+	// config written from LLD §12 is valid.
 	Budgets map[string]any `yaml:"budgets"`
-	Notify  map[string]any `yaml:"notify"`
 	Privacy map[string]any `yaml:"privacy"`
 }
 
@@ -122,9 +128,10 @@ func Parse(b []byte) (File, []string, error) {
 func (f File) Validate() error {
 	var errs []error
 	bad := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
-	if f.Mode != nil && *f.Mode != ModeObserve && *f.Mode != ModeEnforce {
-		bad("mode: %q is not observe or enforce", *f.Mode)
+	if f.Mode != nil && !ValidMode(*f.Mode) {
+		bad("mode: %q is not observe, notify, assist, or guard", *f.Mode)
 	}
+	f.Notify.validate(bad)
 	if v := f.ObserveDaysAfterInstall; v != nil && *v < 0 {
 		bad("observe_days_after_install: %d is negative", *v)
 	}

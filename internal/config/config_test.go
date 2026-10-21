@@ -32,7 +32,7 @@ budgets:
   session: { soft_usd: 5 }
 `)
 	c := Defaults().Apply(f, GlobalFile)
-	if c.Mode != ModeEnforce || c.ModeSource != GlobalFile || !c.ObserveUntil.Equal(time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC)) {
+	if c.Mode != ModeGuard || c.ModeWritten != ModeEnforce || c.ModeSource != GlobalFile || !c.ObserveUntil.Equal(time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC)) {
 		t.Errorf("mode %q from %q until %v", c.Mode, c.ModeSource, c.ObserveUntil)
 	}
 	if c.Thresholds.Detectors.RepeatedFailure.MinCount != 5 || c.Thresholds.Policy.HaltAfterMinutes != 30 {
@@ -50,6 +50,12 @@ budgets:
 	}
 	for _, bad := range []string{
 		"mode: on",
+		"mode: off",
+		"notify: { on: [loops] }",
+		"notify: { webhook: { format: teams } }",
+		"notify: { webhook: { url: 'ftp://x' } }",
+		"notify: { ntfy: { topic: 'a b' } }",
+		"notify: { desktop: maybe }",
 		"mode: [enforce]",
 		"detectors: { repeated_failure: { min_count: 1 } }",
 		"policy: { nudge_threshold: 1.5 }",
@@ -63,7 +69,7 @@ budgets:
 	}
 }
 
-func TestRepoFileOnlyTightens(t *testing.T) {
+func TestRepoFileOnlyRaises(t *testing.T) {
 	global := Defaults().Apply(mustParse(t, `
 mode: observe
 detectors: { oscillation: { enabled: false } }
@@ -82,8 +88,8 @@ policy:
 polling_families: ["npm test"]
 `), "/r/"+RepoFile)
 
-	if c.Mode != ModeObserve {
-		t.Errorf("a repo file turned enforcement on: mode %q", c.Mode)
+	if c.Mode != ModeGuard || c.ModeSource != "/r/"+RepoFile {
+		t.Errorf("a repo file didn't raise the level: mode %q from %q", c.Mode, c.ModeSource)
 	}
 	if !c.ObserveUntil.IsZero() || c.Thresholds.Detectors.Window != 50 {
 		t.Error("a repo file set a global-only key")
@@ -103,7 +109,7 @@ polling_families: ["npm test"]
 	if c.Thresholds.PollingFamilies[0] != "sleep" || len(c.Thresholds.PollingFamilies) != len(Default().PollingFamilies) {
 		t.Error("a repo file changed the polling list")
 	}
-	want := []string{"mode: enforce", "observe_until", "detectors.window", "min_count: 10", "oscillation.enabled: true",
+	want := []string{"observe_until", "detectors.window", "min_count: 10", "oscillation.enabled: true",
 		"deny_min_severity: 0.9", "polling_families"}
 	all := strings.Join(notes, "\n")
 	for _, w := range want {
@@ -112,19 +118,57 @@ polling_families: ["npm test"]
 		}
 	}
 
-	// Tightening that is allowed.
-	enforce := Defaults().Apply(mustParse(t, "mode: enforce"), GlobalFile)
-	c, notes = enforce.Tighten(mustParse(t, "mode: observe\ndetectors: { repeated_failure: { enabled: false } }"), RepoFile)
-	if c.Mode != ModeObserve || c.ModeSource != RepoFile || c.Thresholds.Detectors.RepeatedFailure.Enabled || len(notes) != 0 {
+	// A repo file can't lower the level, nor turn LoopGuard off.
+	guard := Defaults().Apply(mustParse(t, "mode: guard"), GlobalFile)
+	for _, lower := range []string{"mode: observe", "mode: notify", "mode: assist", "enabled: false"} {
+		c, notes = guard.Tighten(mustParse(t, lower), RepoFile)
+		if m := c.EffectiveMode(time.Now()); m.Mode != ModeGuard || len(notes) != 1 || !strings.Contains(notes[0], "lower") {
+			t.Errorf("%q against guard: %+v, notes %v", lower, m, notes)
+		}
+	}
+	// Allowed: raising, the same level (no note), and turning a detector off.
+	notify := Defaults().Apply(mustParse(t, "mode: notify"), GlobalFile)
+	c, notes = notify.Tighten(mustParse(t, "mode: assist\ndetectors: { repeated_failure: { enabled: false } }"), RepoFile)
+	if c.Mode != ModeAssist || c.ModeSource != RepoFile || c.Thresholds.Detectors.RepeatedFailure.Enabled || len(notes) != 0 {
 		t.Errorf("mode %q from %q, rf enabled %v, notes %v", c.Mode, c.ModeSource, c.Thresholds.Detectors.RepeatedFailure.Enabled, notes)
 	}
-	c, _ = enforce.Tighten(mustParse(t, "enabled: false"), RepoFile)
-	if m := c.EffectiveMode(time.Now()); m.Mode != ModeOff || !strings.Contains(m.Why, RepoFile) {
-		t.Errorf("enabled: false → %+v", m)
+	if c, notes := guard.Tighten(mustParse(t, "mode: enforce"), RepoFile); len(notes) != 0 || c.ModeSource != GlobalFile {
+		t.Errorf("the same level: notes %v, source %q", notes, c.ModeSource)
 	}
-	// mode: enforce in a repo is fine (no note) when the global config
-	// enforces anyway.
-	if _, notes := enforce.Tighten(mustParse(t, "mode: enforce"), RepoFile); len(notes) != 0 {
+	// The repo's level also applies after the global grace period only.
+	grace := Defaults().Apply(mustParse(t, "mode: observe\nobserve_until: 2030-01-01T00:00:00Z"), GlobalFile)
+	if c, _ := grace.Tighten(mustParse(t, "mode: guard"), RepoFile); c.EffectiveMode(time.Now()).Mode != ModeObserve {
+		t.Errorf("a repo file skipped the grace period: %+v", c.EffectiveMode(time.Now()))
+	}
+}
+
+func TestNotifyConfig(t *testing.T) {
+	d := Defaults().Notify
+	if !d.Wants(d.Desktop, EventLoopDetected) || !d.Wants(d.Desktop, EventHalt) || d.Wants(d.Desktop, EventNudge) ||
+		d.Wants(d.Terminal, EventHalt) || d.Wants(d.Ntfy, EventHalt) || d.Wants(d.Webhook, EventHalt) {
+		t.Errorf("defaults: %+v", d)
+	}
+	c := Defaults().Apply(mustParse(t, `
+notify:
+  on: [halt, stall]
+  desktop: false
+  terminal: true
+  ntfy: { topic: loopguard-abc, on: [deny] }
+  webhook: { url: "https://hooks.example.com/x", format: discord }
+`), GlobalFile).Notify
+	if c.Wants(c.Desktop, EventHalt) || !c.Wants(c.Terminal, EventStall) || c.Wants(c.Terminal, EventLoopDetected) {
+		t.Errorf("channel switches or default events: %+v", c)
+	}
+	if !c.Wants(c.Ntfy, EventDeny) || c.Wants(c.Ntfy, EventHalt) || c.Ntfy.Server != DefaultNtfyServer {
+		t.Errorf("ntfy: a topic turns it on, its own on: list wins: %+v", c.Ntfy)
+	}
+	if !c.Wants(c.Webhook, EventHalt) || c.Webhook.Format != FormatDiscord {
+		t.Errorf("webhook: %+v", c.Webhook)
+	}
+	// The M3-A sample's events stay valid.
+	mustParse(t, "notify: { on: [halt, budget_soft, budget_hard, stall], ntfy: { topic: '' } }")
+	// A repo file can't change notifications.
+	if _, notes := Defaults().Tighten(mustParse(t, "notify: { desktop: false }"), RepoFile); len(notes) != 1 {
 		t.Errorf("notes %v", notes)
 	}
 }
@@ -136,9 +180,13 @@ func TestEffectiveMode(t *testing.T) {
 	}{
 		{"", ModeObserve, "the default"},
 		{"mode: observe", ModeObserve, "mode: observe in config.yaml"},
-		{"mode: enforce", ModeEnforce, "mode: enforce in config.yaml"},
+		{"mode: enforce", ModeGuard, "mode: enforce (= guard) in config.yaml"},
+		{"mode: guard", ModeGuard, "mode: guard in config.yaml"},
+		{"mode: notify", ModeNotify, "mode: notify in config.yaml"},
+		{"mode: assist", ModeAssist, "mode: assist in config.yaml"},
 		{"mode: enforce\nobserve_until: 2026-10-23T12:00:00Z", ModeObserve, "observe until 2026-10-23"},
-		{"mode: enforce\nobserve_until: 2026-10-19T12:00:00Z", ModeEnforce, "mode: enforce"},
+		{"mode: assist\nobserve_until: 2026-10-23T12:00:00Z", ModeObserve, "then assist"},
+		{"mode: enforce\nobserve_until: 2026-10-19T12:00:00Z", ModeGuard, "mode: enforce"},
 		{"mode: observe\nobserve_until: 2026-10-19T12:00:00Z", ModeObserve, "mode: observe"},
 		{"enabled: false\nmode: enforce", ModeOff, "enabled: false"},
 	} {
@@ -172,7 +220,7 @@ func TestLoader(t *testing.T) {
 		t.Fatalf("no files: %+v", e)
 	}
 	write(filepath.Join(home, GlobalFile), "mode: enforce\n")
-	if e = l.For(repo); e.ModeAt(now).Mode != ModeEnforce {
+	if e = l.For(repo); e.ModeAt(now).Mode != ModeGuard {
 		t.Fatalf("after writing mode: enforce: %+v", e.ModeAt(now))
 	}
 	key := e.Key
