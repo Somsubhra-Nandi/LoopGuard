@@ -36,14 +36,13 @@ loopguard/
 │   ├── detect/                     # Detector interface + exact_repeat, repeated_failure, oscillation, read_thrash, stall, budget
 │   ├── policy/                     # escalation state machine, cooldowns, message templates
 │   ├── pipeline/                   # normalize → session → detect → policy, shared by replay and the daemon
-│   ├── cost/                       # transcript tailer, usage dedupe, pricing, budgets
+│   ├── cost/                       # transcript tailer, usage dedupe, pricing (+ the shipped pricing.yaml), per-call estimates
 │   ├── notify/                     # desktop, ntfy, webhook (slack/discord), terminal-sequence
 │   ├── store/                      # sqlite (modernc.org/sqlite), migrations, repositories
 │   ├── replay/                     # offline transcript → event stream → detectors → report
 │   ├── dashboard/                  # go:embed templates + htmx, REST handlers
 │   ├── config/                     # config.yaml + .loopguard.yaml merge, defaults, validation
 │   └── redact/                     # secret patterns
-├── pricing.yaml                    # default model price table (user-overridable)
 ├── testdata/
 │   ├── transcripts/                # anonymized real sessions (labeled)
 │   └── hooks/                      # golden hook payloads per agent/version
@@ -416,11 +415,14 @@ All detectors look only at calls since the later of: the last human prompt (`Tur
 - **Severity:** 0.55 (at the nudge threshold). It's lower-confidence: it **nudges once per turn** and can notify the human (event `stall`, §15); it never denies or halts.
 
 ### D6. Budget
-- Inputs: `Usage` (from the cost accountant), wall time, and tool-call count.
-- **Soft limit:** signal severity 0.5 → notify only.
-- **Hard limit:** severity 1.0 → halt.
-- Limits per session, per day (global), and per repo: `cost_usd`, `tokens`, `wall_minutes`, `tool_calls`.
-- **LoopKey:** `bg:<scope>:<limit>`
+- **Inputs:** totals kept by the daemon across sessions (`usageBook`, §8.3), not one session's calls: API-equivalent cost and tokens from the transcript tailer (§8.1), wall minutes and completed tool calls from the hook events. `detect.Budget(limits, totals)` is pure, like the other detectors; it runs on every tool event (pre, post, post-failure, batch end), not in the per-call detector loop.
+- **Scopes:** `session` (one agent session with its subagents, its whole life), `daily` (all sessions, the local calendar day), `repo` (the sessions of one git repo, the local day). **Metrics:** `cost_usd` (API-equivalent, priced messages only), `tokens` (input + output + cache writes + cache reads, Claude Code's own convention), `wall_minutes` (first to latest event per session, summed over sessions for daily/repo), `tool_calls` (completed calls). Each has a soft and a hard limit; 0 is off. **Defaults: everything off except `daily.soft_usd: 20`.**
+- **Fires when** a value is **over** a limit (at the limit is not over): one signal per scope and metric, the hard one if the hard limit is passed, else the soft one.
+- **Soft** (severity 0.5): one factual nudge per session and period, given with a tool result (post), reaching the agent at assist and guard (recorded as a would-have below); one `budget_soft` notification per period.
+- **Hard** (severity 1.0): at **guard**, a halt on **every tool event of the session while over the limit**, subagent streams included (unlike loop halts, decision 57: the budget is the session's, so usage from a subagent may stop the parent's turn); recorded once per turn. The next human prompt starts a turn whose first tool call halts again, so there is no "commands are not blocked now" note. Below guard: recorded once per period as a would-have; at notify and above one `budget_hard` notification per period.
+- **Lag:** usage is read from the transcript every 2 s and the transcript is written a little after the call, so a hard cost or token limit stops the turn at the first tool event **after** the tailer has seen the crossing: the total can run a little past the limit. The halt message says so.
+- **LoopKey:** `bg:<scope>:<metric>` (e.g. `bg:session:cost_usd`). The period (session id, local date, or date + repo) is in `Evidence.Budget`.
+- **Halt message** (stopReason): `LoopGuard stopped this turn: this session's API-equivalent cost is $15.40, over the hard budget of $15.00. Usage is read from the transcript a few seconds late, so the total can pass the limit before the stop. Your next message continues normally, but tool calls stop again while the budget is exceeded. To raise it, set budgets.session.hard_usd in config.yaml (loopguard home), or turn LoopGuard off for this session: loopguard pause --session 1a2b3c4d` (the lag sentence only for cost and tokens). **Nudge:** `LoopGuard observation: this session's API-equivalent cost is $5.20, past the soft budget of $5.00 (budgets.session.soft_usd). Nothing is blocked; this is a heads-up. Options that often help: finishing the current step and checking with the user before starting more work.`
 
 ### 6.1 Deduplication across detectors
 
@@ -455,7 +457,7 @@ stateDiagram-v2
   | `guard` (`enforce` is its old name) | nudge → deny → halt | notifications |
 
   `Decision.WouldHave`, `.Reason`, and `.Message` always record what guard does; `Decision.Action` is that action when the session's level allows it (`SessionState.Allow`: `halt` for guard, `nudge` for assist, `none` otherwise, also for pauses and replay), and `none` otherwise. The daemon caps the rendered action again (`capAction`).
-- **User stop** (`loopguard stop`, §18 M3-C): a halt the human asks for, given on the session's next tool event (pre, post, or batch end) with stopReason `Stopped by the user via loopguard stop.`, whether or not a loop was seen. It applies at every level but observe, and it is exempt from the level cap (as are the notes after a stop or block, below). The request stays until the main stream's turn ends (Stop, a human prompt, SessionEnd) or an hour passes; every halt-capable event of the session (subagents included) is halted until then, and the first is recorded (`detector = user_stop`, outcome `n/a`).
+- **User stop** (`loopguard stop`, §18 M3-C): a halt the human asks for, given on the session's next tool event (pre, post, or batch end) with stopReason `Stopped by the user via loopguard stop.`, whether or not a loop was seen. It applies at every level but observe, and it is exempt from the level cap (as are the notes after a stop or block, below). The request stays (in memory and, since M4, in the `stop_requests` table, so a daemon restart keeps it) until the main stream's turn ends (Stop, a human prompt, SessionEnd) or an hour passes; every halt-capable event of the session (subagents included) is halted until then, and the first is recorded (`detector = user_stop`, outcome `n/a`).
 - **Resets:** "progress" is measured since the loop entered its current stage. For **repeated-failure loops it is the family's progress only** (§5.1); other loops use the general score. A reset loop keeps its nudge history, so the cooldown still applies.
 - **Deny** applies only to the **looping action**: a `PreToolUse` that matches the loop. A D1 loop matches the same `ActionFP`, a D2 loop one of the **command identities** of its failing runs (§4.3, `normalize.Identity`: the canonical command and its meaningful arguments, so `go test ./pkg/a` doesn't block `go test ./pkg/b`, while `python3 -m pytest tests -q` matches `pytest tests`; tools without identities match by family), and a D3 loop an edit or write to the same file. Other actions pass.
 - **One more try after a real change**: once a D2 loop has denied at least once, a matching action runs once more if, since the loop's last failing run, a file not edited during the loop was edited or written. If that run fails with the loop's error, the loop is back to denying and the try counts toward the halt like a denied attempt; if it succeeds or fails differently, the loop resets. One try per failing run. (A changed command identity isn't blocked in the first place; if it fails the same way, it joins the loop's identities.)
@@ -464,7 +466,7 @@ stateDiagram-v2
 - **Halt** ends the turn (`continue:false`). The session itself stays usable when the human returns; `Loops` state is reset on the next human `UserPromptSubmit`, and that prompt's reply carries a short note (§7.3) that the stop is over. After a turn whose denies reached the agent but that didn't halt, the first human prompt gets the same kind of note about the blocks.
 - **Cooldown:** max 1 nudge per LoopKey per 10 **completed calls**, and max 3 nudges per turn overall. Suppressed nudges are not recorded. D5's loop (the turn) is nudged at most once.
 - **Permission mode awareness:** in `default` (manual approval) mode, the deny and halt occurrence thresholds are raised by 1 (`manual_mode_extra_occurrences`), since a human is presumably watching. In `auto`/`bypassPermissions`/`dontAsk`, the normal thresholds apply.
-- Detector capabilities: D1/D2/D3 can deny + halt; D4 nudge only; D5 one nudge per turn + notify; D6 notify + halt.
+- Detector capabilities: D1/D2/D3 can deny + halt; D4 nudge only; D5 one nudge per turn + notify; D6 one soft nudge per period + notify, and a hard halt at guard on every tool event of the session (§6 D6; outcome `n/a`).
 
 ### 7.2 Decision timing
 
@@ -534,33 +536,54 @@ LoopGuard observation: {path} has been changed back to a previous version {n} ti
 ## 8. Cost accounting (`internal/cost`)
 
 ### 8.1 Transcript tailer
-- When a `SessionStart` or first event arrives with `transcript_path`, register a tailer: poll every 2 s (fsnotify where available) and read from the stored byte offset.
-- Parse JSONL lines; for assistant messages, extract `message.id`, `message.model`, and `message.usage.{input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}`.
-- **Deduplicate by `message.id`** (a streamed message can appear on multiple lines; keep the max of each counter per id).
-- Persist `(session, message_id, model, counters)`. Unknown lines are ignored (forward compatible).
-- Codex: tail its session rollout JSONL (location and token-count event shape to be verified per version) through a `codex` tailer implementation behind the same interface.
+- **Registration:** every hook event with a `transcript_path` registers its session (by session id) with the daemon's tailer. While the session had an event in the last **10 minutes** and hasn't ended, its transcripts are polled every **2 s** (`Options.TailEvery`): the main transcript and every `<session>/subagents/agent-<id>.jsonl` next to it (subagent hook events carry the parent's path), each as its own stream (`claude-code:<sid>` and `claude-code:<sid>/<agent>`). After `SessionEnd` or 10 idle minutes it is polled once more and dropped; the next event registers it again. No fsnotify: polling is simpler and enough at 2 s.
+- **Incremental reads** (`cost.Tailer`): from the stored byte offset (`transcript_offsets`), line by line with a buffered reader (never the whole file; a 45 MB transcript is fine, and lines of any length). Only complete lines are consumed: a line still being written (no newline yet) is read on a later poll.
+- **Rotation and truncation:** the offset row also stores a fingerprint of the file's first `min(1 KB, offset)` bytes (in the `inode` column: inode numbers aren't portable to Windows, and a fingerprint also catches a file rewritten in place). If the file is shorter than the offset, or its fingerprint changed, reading starts over at 0. Re-read lines are harmless (deduplication below).
+- **Parsing** (`cost.ParseLine`): assistant lines with `message.id` and `message.usage`: `input_tokens`, `output_tokens` (includes thinking), `cache_creation_input_tokens` (with `cache_creation.ephemeral_1h_input_tokens`, the part written to the one-hour cache), `cache_read_input_tokens`, `speed` (`fast` is fast mode), `inference_geo` (`us` is US-only inference), and `message.model`. Lines without `"assistant"` skip the JSON decode. Unknown lines and fields are ignored.
+- **Deduplicate by `message.id`** (`cost.Ledger`): one API message spans several lines, each repeating its usage, and the counters can grow between lines; the ledger keeps the **max of each counter** per id. A restarted daemon pre-loads the stream's stored rows into the ledger, so a message whose lines straddle the restart counts once.
+- **Persisted** as `usage` rows (§11) through the batched writer: one row per (stream, message) with the maxima (`ON CONFLICT … MAX(…)`), then the new offset. Growth (delta tokens and cost) goes into the usage book (§8.3).
+- Codex (M5): a `codex` tailer behind the same interface, once its session file's token events are verified.
 
 ### 8.2 Pricing
-`~/.loopguard/pricing.yaml` (shipped default, user-editable, refreshable with `loopguard pricing update` from the repo):
+`<home>/pricing.yaml`, written by the daemon at start from the table shipped in the binary (`internal/cost/pricing.yaml`, go:embed) when there is none, and never overwritten: the user edits it. Re-read when it changes (checked every 2 s). An invalid file is logged (daemon), shown by `doctor`, and the shipped table is used. Keys are checked strictly (a typo in a price key would price at 0).
 
 ```yaml
-currency: USD
-models:
-  - match: "claude-opus-*"
-    input_per_mtok: 0      # fill from the provider's current pricing page
-    output_per_mtok: 0
-    cache_write_per_mtok: 0
-    cache_read_per_mtok: 0
-  - match: "claude-sonnet-*"
-    # ...
-fx:
-  INR: 0   # optional display conversion, user-set
+currency: USD                 # prices are always USD
+currency_display: ""          # optional, e.g. INR: shown next to USD
+fx_rate: 0                    # display currency per USD, set by the user; never fetched
+models:                       # first match wins
+  - match: claude-opus-5-5    # the model id, ignoring a -YYYYMMDD date or [suffix]; globs (*, ?) work
+    input_per_mtok: 4
+    output_per_mtok: 20
+    cache_write_per_mtok: 5          # 5-minute cache
+    cache_write_1h_per_mtok: 8       # one-hour cache (Claude Code mostly writes this one)
+    cache_read_per_mtok: 0.20
+    fast_multiplier: 2               # usage.speed "fast"
+    us_multiplier: 1.1               # usage.inference_geo "us"
+    long_prompt: { above_tokens: 100000, input_per_mtok: …, … }   # Haiku 5.5: prompts over 100k tokens
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"            # or "unverified"
 ```
 
-Cost = Σ tokens × rate. For subscription users, the dashboard labels this **"API-equivalent cost"** and also shows token counts and time.
+- **Cost of a message** = (input × input + output × output + 5-minute writes × cache_write + one-hour writes × cache_write_1h + cache reads × cache_read) / 1e6, × the fast and US multipliers when they apply; the long-prompt rates when input + cache writes + cache reads is over `above_tokens`.
+- **Shipped prices** (all `checked: 2026-10-21`, from the official pricing page above): Fable 5.1, Mythos 5.1, Fable 5, Mythos 5, Opus 5.5, Opus 5, 4.8, 4.7, 4.6, 4.5, 4.1, 4, Sonnet 5.5, 5, 4.6, 4.5, 4, Haiku 5.5 (with its long-prompt tier), Haiku 4.5, Haiku 3.5. Checked against Claude Code's own `cost-state` lines (§18 M4-A).
+- **Unknown or unverified models:** an entry with `checked: unverified` (or none) prices nothing: its tokens are counted and its cost is **unknown**, never 0 (`unpriced_tokens`); `doctor` warns about unverified entries and lists the models seen in the last 30 days without a price. `<synthetic>` messages (written by the client) cost 0.
+- **"API-equivalent" everywhere** (`replay`, `report`, `status`, budgets, notifications): subscription users don't pay per token; the number says what the same usage would cost through the API.
+- Costs are recomputed from the stored counters with the current table when read (`report`, `status` with the daemon down, the daemon's start), so a price added later applies to old usage too. `usage.cost_usd` is only the cost when written.
 
 ### 8.3 Budgets
-Checked on every usage update and on every pre event, as D6 input. Because transcript usage lags by a few seconds, the hard limit is enforced **at the next tool call after crossing**. The docs must say so honestly.
+The daemon's **usage book** (`daemon.usageBook`) keeps, per session (subagents included, and per stream for display), per local day, and per repo for the day: tokens, API-equivalent cost, unpriced tokens, tool calls, and each session's first and latest event (wall time). Usage growth comes from the tailer, calls and wall time from the hook events. At start, and when the day changes, the day's totals are loaded from the store (usage rows since midnight, the day's calls, the sessions seen today); a session's own totals are loaded the first time it is seen. Sessions not seen for 48 h are forgotten.
+
+D6 (§6) is checked on every tool event against the limits in effect for the event's repo (§12). Because transcript usage lags by a few seconds, a hard cost or token limit is enforced **at the next tool call after the tailer saw the crossing**; tool calls and wall time are counted at once. The docs and the halt message say so.
+
+### 8.4 Cost estimates per tool call
+`loopguard report` (and `replay --json` via the library) estimates what each tool call cost, marked **est.** everywhere (`cost.Scanner`, fed every raw line in the same pass as replay's reader):
+
+- **Estimate** = the call's share of the output tokens of the API message that issued it (split evenly among the message's tool calls) × that model's output price, **plus** its result size in tokens (characters / 4: transcripts carry no exact count; text blocks only, images not counted) × the price of carrying it in every later model call of the stream until the next compaction (`compact_boundary`): the cache-read price for calls that read from the cache, else the input price, each at its own model's price.
+- **Cap:** a stream's estimates are scaled down if they add up to more than its real cost, so the shares never add up to more than 100%.
+- **Groups:** a shell command by its family (`bash: npm test`), a file tool by its file relative to the cwd (`read src/a.go`, redacted), anything else by the tool.
+- **Report tables:** "Top 10 by estimated cost" (group, runs, average output size, est. cost, est. share of the real cost) and "Largest outputs" (the 5 single results with the highest estimate).
+- **Loops:** the cost of a loop is the cost of the model calls from the one that issued its first call to the one that issued its last (`replay`, `report`); "cost inside loops" is the union of those per stream.
 
 ---
 
@@ -597,6 +620,7 @@ type job struct { ev *event.Event; reply chan event.Decision }
 | `GET /v1/sessions/{id}` | Session detail: calls, signals, interventions, usage |
 | `GET /v1/pauses`, `POST /v1/pauses/reload` | The pauses in effect; re-read the `pauses` table after `loopguard pause`/`resume` wrote it (§18 M3-A) |
 | `POST /v1/stop` | `{"session": "<id prefix>"}` or `{"all": true}`: stop the named live sessions' turns at their next tool call (`loopguard stop`, §7.1); answers which sessions will stop and which observe (refused); 404 none, 409 ambiguous |
+| `GET /v1/usage` | Today's usage, each live session's (subagents included, and per stream), and config.yaml's budgets: tokens, API-equivalent cost, unpriced tokens, tool calls, wall minutes (`loopguard status`) |
 | `GET /v1/stats?range=7d` | Loops caught, time and cost saved estimates |
 | `GET /v1/decisions?limit=10` | Newest decisions of all sessions (in observe mode: what it would have done), with detector, reason, and time (`loopguard status`) |
 | `GET /healthz`, `GET /metrics` | Health (version, pid, home id, store, capture on/off, start time) and Prometheus metrics |
@@ -695,17 +719,32 @@ CREATE TABLE interventions (
   outcome     TEXT                -- filled later: recovered|continued_loop|halted|unknown
 );
 
-CREATE TABLE usage (
-  session_key TEXT NOT NULL,
+CREATE TABLE usage (                     -- one row per API message per stream (§8.1)
+  session_key TEXT NOT NULL,             -- the stream: claude-code:<sid> or claude-code:<sid>/<agent>
   message_id  TEXT NOT NULL,
   ts          INTEGER,
   model       TEXT,
-  input_tokens INTEGER, output_tokens INTEGER, cache_read INTEGER, cache_write INTEGER,
-  cost_usd    REAL,
+  input_tokens INTEGER, output_tokens INTEGER, cache_read INTEGER, cache_write INTEGER,  -- maxima over the message's lines
+  cost_usd    REAL,                      -- at write time; NULL: no verified price. Readers re-price.
+  session_id  TEXT,                      -- migration 4: the agent session (all its streams)
+  repo        TEXT,                      -- migration 4
+  cache_write_1h INTEGER DEFAULT 0,      -- migration 4: the one-hour part of cache_write
+  speed       TEXT,                      -- migration 4: "fast" = fast mode
+  geo         TEXT,                      -- migration 4: inference_geo
   PRIMARY KEY (session_key, message_id)
 );
+CREATE INDEX idx_usage_ts ON usage(ts);            -- migration 4
+CREATE INDEX idx_usage_session ON usage(session_id);
+CREATE INDEX idx_calls_ts ON calls(ts);
 
+-- inode holds a fingerprint of the file's first min(1 KB, offset) bytes (§8.1), not an inode number.
 CREATE TABLE transcript_offsets (path TEXT PRIMARY KEY, offset INTEGER NOT NULL, inode INTEGER);
+
+CREATE TABLE stop_requests (             -- migration 4: pending `loopguard stop` (§7.1)
+  session_id   TEXT PRIMARY KEY,
+  requested_at INTEGER NOT NULL,         -- unix ms; older than an hour is dropped
+  recorded     INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER);
 
 CREATE TABLE pauses (                   -- migration 3: `loopguard pause`
@@ -725,7 +764,7 @@ CREATE TABLE pauses (                   -- migration 3: `loopguard pause`
 
 ## 12. Configuration (`internal/config`)
 
-`~/.loopguard/config.yaml` (global) merged with `<repo>/.loopguard.yaml` (per repo, at the git root of the session's cwd). The repo file may make LoopGuard **more protective, never less** (exact rules in §18 M3-A and M3-C): it may **raise** the level (`mode`), never lower it below config.yaml's (`enabled: false` in a repo file is ignored too: pause the repo instead), and it may turn a detector off and lower occurrence/severity thresholds and budgets. One exception, by design: a repo file may **add** `slow_families` (a repo knows its slow commands, and they only lose the time-based halt). A missing file means the defaults; an invalid one is skipped with a warning (daemon log, `doctor`). When no file sets `mode`, the level is **observe**.
+`~/.loopguard/config.yaml` (global) merged with `<repo>/.loopguard.yaml` (per repo, at the git root of the session's cwd). The repo file may make LoopGuard **more protective, never less** (exact rules in §18 M3-A and M3-C): it may **raise** the level (`mode`), never lower it below config.yaml's (`enabled: false` in a repo file is ignored too: pause the repo instead), and it may turn a detector off and lower occurrence/severity thresholds and budgets (a budget config.yaml leaves off may be set; one it sets may only be lowered, never raised or turned off: §18 M4-A). One exception, by design: a repo file may **add** `slow_families` (a repo knows its slow commands, and they only lose the time-based halt). A missing file means the defaults; an invalid one is skipped with a warning (daemon log, `doctor`). When no file sets `mode`, the level is **observe**.
 
 **Levels** (`mode`), least to most protective: `observe` (record only), `notify` (notify the human, never touch the agent), `assist` (notify and nudge; never deny or halt), `guard` (nudge → deny → halt, and notify). `enforce`, the M3-A name, is read as `guard`. The effective level of an event: `enabled` (config.yaml) → the higher of config.yaml's and the repo's `mode` (unset: observe) → `observe_until` (observe until then, whatever the level) → pauses (observe). `doctor`, `status`, and `/v1/sessions` show each session's level and why.
 
@@ -764,16 +803,18 @@ error_marker_families: ["pytest", "jest", "vitest", "go test", "cargo test", "ca
                         "npm test", "yarn test", "pnpm test", "bun test", "npm run test", "yarn run test",
                         "pnpm run test", "bun run test", "npx jest", "npx vitest", "npx tsc",
                         "mvn", "mvnw", "gradle", "gradlew", "make", "dotnet test"]
-budgets:
-  session: { soft_usd: 5, hard_usd: 15, wall_minutes: 180 }
-  daily:   { soft_usd: 20, hard_usd: 50 }
+budgets:                 # D6 (§6); 0 or absent = off. Default: only daily soft_usd 20
+  session: { soft_usd: 5, hard_usd: 15, soft_tokens: 0, hard_tokens: 0,
+             soft_wall_minutes: 0, hard_wall_minutes: 180, soft_tool_calls: 0, hard_tool_calls: 0 }
+  daily:   { soft_usd: 20, hard_usd: 50 }      # all sessions, local day
+  repo:    { hard_tool_calls: 2000 }           # one repo's sessions, local day
 notify:                  # global only; sent at the notify level and above (§15)
-  on: [loop_detected, halt]          # events of channels without their own on:
+  on: [loop_detected, halt, budget_soft, budget_hard]   # events of channels without their own on:
   desktop:  { enabled: true }        # `desktop: true` works too
   terminal: { enabled: false }
   ntfy:     { enabled: false, server: "https://ntfy.sh", topic: "", on: [halt] }   # a topic alone turns it on
   webhook:  { enabled: false, url: "", format: "slack" }   # slack | discord | generic; a url alone turns it on
-  # events: loop_detected, nudge, deny, halt, stall (budget_soft, budget_hard: accepted, M4)
+  # events: loop_detected, nudge, deny, halt, stall, budget_soft, budget_hard
 privacy:
   retention_days: 30
   store_outputs: tail   # none | tail
@@ -828,7 +869,8 @@ The transcript format is described in [transcript-format.md](./transcript-format
 - **Calls** are numbered from 1 per stream in completion order; the report, labels, and `--calls` all use these numbers.
 - **Wasted time** of a loop runs from its first call to its last (min/max of the calls in its signals' evidence). **Wasted tool calls** are `last - first + 1`. Totals are the union over a stream's loops, so overlaps count once.
 - Each top loop shows the repo, detector, family or file, count, duration, 2 redacted error lines, and what LoopGuard would have done: nudge, deny, or halt, at which call. `--top 0` lists no loops; `--top -1` lists all.
-- `--json` emits the same data with a versioned schema ([replay-json.md](./replay-json.md)). Cost is M4.
+- `--json` emits the same data with a versioned schema ([replay-json.md](./replay-json.md)).
+- **Cost** (§8): usage and API-equivalent cost per stream and session (deduplicated by message id, subagents rolled up into their session), the cost of each loop (the model calls from its first call to its last), and the cost inside loops (their union per stream); models without a verified price are counted and listed, their cost unknown. Prices come from `<home>/pricing.yaml` when it exists (replay never writes it), else the shipped table. Anonymized exports keep usage (counts, model, hashed message id), compaction boundaries, and each result's original length (`chars`), so cost works on them too.
 
 **Tuning visibility** (detection-free; changes no thresholds)
 - Every report shows the **top 10 command families by failures** (runs, failures, soft failures) and the **longest same-family failure streak per stream**. A streak is any errors, with no success of the family in between.
@@ -879,6 +921,7 @@ type Notification struct {
 - `loop_detected`: a D1-D3 loop reaches the nudge threshold, once per loop per turn (whether or not the level lets the nudge through).
 - `stall`: a D5 signal (once per turn).
 - `nudge`, `deny`, `halt`: such a decision **reached the agent** (assist: nudges; guard: all). A halted loop's further halts aren't notified again. The user's own stop isn't notified.
+- `budget_soft`, `budget_hard`: a budget limit was passed (§6 D6), once per limit and period (session, day, or repo day), at any level from notify up, whether or not anything reached the agent. The body names the scope, metric, value, and limit, e.g. `Hard budget passed: session cost $15.40 (API-equivalent), hard limit $15.00. At the guard level, tool calls stop until the limit is raised.` Both are in the default `on:` list.
 
 **Content** is the same on every channel, and holds only what may leave the machine: title `LoopGuard: <project folder name>`, and a body from the detector, the command family (a path is cut to its base name, secrets redacted, other characters than letters, digits, space, and `._-+:` removed, at most 40), the count, and the duration, plus `To stop it: loopguard stop <short id>` (not on a halt: the turn has stopped). Never file paths, error lines, or code. E.g. `Loop detected: "npm test" failed 6 times in a row with the same error, over 12 min. To stop it: loopguard stop 1a2b3c4d`.
 
@@ -1123,3 +1166,47 @@ Levels, notifications, `loopguard stop`, D4/D5, quoted evidence, and the wording
 
 **CI**
 95. **govulncheck** (`make vulncheck`, `golang.org/x/vuln/cmd/govulncheck@v1.9.0`) runs on all three CI platforms, after staticcheck. It reported no vulnerabilities with Go 1.27.2 when added.
+
+### M4-A
+
+Cost, budgets, and `loopguard report`: decisions the sections above didn't specify.
+
+**Usage** (§8.1)
+96. **Polling, no fsnotify**: every 2 s while the session had a hook event in the last 10 minutes; one last poll after `SessionEnd` or going idle. A transcript is read line by line from its stored offset, and only complete lines count (a line being written is read next time). Checked with a 120 MB transcript of 300 KB lines (`TestTailerBigFile`).
+97. **A fingerprint instead of an inode** (`transcript_offsets.inode`): an xxhash of the first `min(1 KB, offset)` bytes. Inode numbers aren't portable (Windows), and the fingerprint also notices a file rewritten in place. A shorter file or another fingerprint restarts at 0; deduplication makes that harmless.
+98. **Dedup keeps the max of each counter per message id**, and a restarted daemon pre-loads the stream's stored rows, so a message whose lines straddle a restart counts once (`TestUsageSurvivesRestart`). In the private corpus 1,779 of 2,170 messages spanned several lines, and 10 lines carried a different usage than an earlier line of the same message.
+99. **Subagents**: their transcripts are found next to the main one (`<session>/subagents/agent-*.jsonl`; hook events of subagents carry the parent's `transcript_path`) and kept as their own streams (`claude-code:<sid>/<agent>`); the session's totals add them up. `report`, `status`, and `/v1/usage` show both.
+100. **Costs are re-priced when read**: `usage` stores the counters (with the one-hour cache-write part, speed, and geo), and `report`, `status` (daemon down), `doctor`, and the daemon's start price them with the current `pricing.yaml`. `usage.cost_usd` is only the cost at write time.
+
+**Pricing** (§8.2)
+101. **Prices from the official page**, fetched on 2026-10-21: https://platform.claude.com/docs/en/about-claude/pricing (docs.claude.com redirects there). Every shipped entry has that `source` and `checked: "2026-10-21"`; none is unverified. Fast mode, US-only inference (1.1×), and Haiku 5.5's over-100k-prompt prices are from the same page.
+102. **One-hour cache writes are priced apart** (2× input; five-minute writes 1.25×). Claude Code writes almost only the one-hour cache: in the private corpus 8.98M of 9.13M cache-write tokens (after dedup). Pricing all writes at the five-minute rate would undercount the write cost by about 37%.
+103. **Checked against Claude Code's own totals**: transcripts contain `cost-state` lines with Claude Code's `totalCostUSD`. One session's `modelUsage` for Opus 5.5 prices to exactly $10.6091082 here (`TestCostMatchesClaudeCode`). Over the 12 private sessions that have a `cost-state` line: Claude Code $116.61, LoopGuard $115.19 (−1.2%); 10 of 12 within 5%, the other two +14.0% and −5.0% (likely usage after the last `cost-state` line was written; not verified).
+104. **Model ids** are matched exactly (ignoring a `-YYYYMMDD` date and a `[…]` suffix), not by prefix globs, so `claude-opus-5` never prices `claude-opus-5-5`, and a future `claude-opus-5-7` is unknown rather than mispriced. The ids of models not seen in the private corpus (Fable, Mythos, Sonnet 5/5.5, Opus 4.7/4.8, …) follow the naming pattern of the ones seen: their prices are verified, their ids assumed.
+105. **Unknown means unknown**: a model without an entry, or with `checked: unverified`, has its tokens counted and its cost left out of every total, shown separately as "not priced" (`unpriced_tokens`); `doctor` lists such models seen in the last 30 days. USD budgets can't count them; token budgets do.
+106. **The display currency** (`currency_display`, `fx_rate`) is only multiplied in for display; the rate is the user's, never fetched.
+107. **`replay` and `report` never write `pricing.yaml`**; the daemon does at start, once. `doctor` warns when it is missing, invalid, or has unverified entries.
+
+**Budgets** (§6 D6, §8.3)
+108. **D6 runs outside the per-call detector loop**: its inputs are cross-session totals the daemon keeps, so `detect.Budget` takes them as arguments (it stays pure) and the actor calls it on every tool event. Replay doesn't run it.
+109. **Scope periods**: session = its whole life; daily and repo = the local calendar day (the book rolls over at midnight and reloads the new day's totals from the store). **Tokens** = all four kinds, as Claude Code totals them. **Wall minutes** = first to latest event per session, summed over sessions.
+110. **Hard budgets halt every tool event of the session, subagents included**, at guard, recorded once per turn; the next turn's first tool call halts again (no "commands are not blocked now" note, which would be false). Unlike loop halts (decision 57), stopping the parent from a subagent's usage is intended: the budget is the session's. Below guard: one would-have halt per period, nothing reaches the agent.
+111. **Soft budgets**: one nudge per session and period, only with a tool result (a nudge can't ride on a pre), at assist and guard; one notification per period. Budget notifications are rate-limited under `bg:<scope>:<metric>:<level>`, so the hard one never waits on the soft one's 10-minute limit.
+112. **Restart**: the book's totals reload from the store; announcements already recorded today (budget interventions since midnight) aren't repeated. A session-scope soft note recorded on an earlier day can come again after a restart.
+113. **A repo file may set a budget that config.yaml leaves off, or lower one**; raising one or setting it to 0 is ignored with a note (`doctor`, `loopguard mode`). `soft > hard` (both set) makes the file invalid.
+114. **Defaults**: only `daily.soft_usd: 20`; `budget_soft` and `budget_hard` join the default notification events (nothing is sent at the default observe level).
+115. **`wall_minutes: 180`** from the earlier §12 sample is not a key (it is `hard_wall_minutes`); as an unknown key it only warns.
+
+**Stop** (§7.1)
+116. **Pending stops are stored** (`stop_requests`, migration 4) and reloaded at start (requests older than an hour are dropped). The request is written synchronously when `loopguard stop` asks; marking it recorded and deleting it happen on the hook path, so those writes run in the background (a failure is logged; the in-memory request still works). `TestStopSurvivesRestart`.
+
+**Report** (`loopguard report`, §8.4)
+117. **With a session**: the timeline comes from the transcript (replay with costs and a timeline), since the database keeps neither turns nor per-turn usage; what LoopGuard did comes from the database when it watched the session (interventions matched to the replayed loops by loop key; the rest listed as "Other"), else the replay's would-haves. Times are offsets from the session's first call, so the output doesn't depend on the time zone (golden tests in `cmd/loopguard/testdata`).
+118. **Without a session**: today, 7 days, and 30 days from the database. Loops are (stream, loop key) pairs whose signals reached the nudge threshold, spanning the calls their evidence names (not split by turn: an approximation), and the stream's usage inside those spans is the estimated cost inside loops. The "Top 10 by estimated cost" comes from the transcripts changed in the last 7 days (the database has no output sizes).
+119. **Estimates are estimates**: characters / 4 for a result (no exact count in transcripts; images not counted), carried at the cache-read price when the later call read from the cache. Capped per stream at its real cost. On a synthetic session where one 200,000-character output is carried by later calls, it is the top group and the largest output (`TestReportSession`).
+120. **No raw text**: reports show families, normalized and redacted commands and paths, counts, and costs; never outputs or prompts (checked in the tests).
+
+**Replay and fixtures**
+121. **Replay reports cost** (`cost` in `--json`; schema version unchanged, the field is additive): totals, per session, per loop, and inside loops. On the private corpus (23 sessions, 24 streams, 2,914 calls): 736.6M tokens (725.1M of them cache reads), $358.02 API-equivalent, every model priced, $0 inside loops (it has no loops); 0.7 s.
+122. **Anonymized exports keep usage** (counts, model, hashed message id), compaction boundaries, and each result's original length (`chars`). The three committed fixtures were re-exported and merged with their committed tool results (the current soft-failure rules would flip `is_error` on 23 results and change the golden's failure statistics), so the golden changed only in line counts and the new cost section ($69.26 for the three).
+123. **`report` is no longer a stub**; `stubCmd` and its test are gone.
