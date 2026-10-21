@@ -33,7 +33,7 @@ Every line has a `type`. Observed types, most common first:
 | `last-prompt`, `ai-title`, `custom-title`, `agent-name`, `mode`, `atis-latch` | Session metadata, no timestamp | no |
 | `queue-operation` | Prompt queue `enqueue`/`dequeue`/`remove` | no |
 | `file-history-snapshot`, `file-history-delta` | Checkpoint bookkeeping | no |
-| `pr-link`, `cost-state` | PR links; running cost totals | no (cost is M4) |
+| `pr-link`, `cost-state` | PR links; Claude Code's running cost totals (`totalCostUSD`, `modelUsage` per model) | no (LoopGuard prices usage itself; `cost-state` was used to check its prices, LLD §18 M4-A) |
 
 Common fields on `user`/`assistant`/`system`/`attachment` lines:
 
@@ -57,6 +57,7 @@ Common fields on `user`/`assistant`/`system`/`attachment` lines:
 ```
 
 - **One content block per line.** A single API message (`message.id`) is spread over several lines (1 to 6+ observed): `thinking`, `text`, and `tool_use` blocks each get their own line, and **each line repeats the message's `usage`**. Cost accounting (M4) must deduplicate by `message.id` (LLD §8.1).
+- **Usage** (what cost accounting reads, LLD §8.1): `usage.input_tokens`, `output_tokens` (thinking included: `output_tokens_details.thinking_tokens` is a part of it), `cache_creation_input_tokens` with `cache_creation.{ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}` (in the sample almost all writes went to the one-hour cache), `cache_read_input_tokens`, `speed` (`standard`; `fast` for fast mode), `service_tier`, `inference_geo` (`global` or `not_available` in the sample), and `iterations`, `server_tool_use`, `fallback_credit` (not used). Models seen: `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-6`, `claude-haiku-5-5`, `claude-haiku-4-5-20251001`, and `<synthetic>` (messages the client writes itself, zero usage). Of 2,170 messages, 1,779 spanned several lines, and 10 lines repeated a message with different counters: keep the maximum of each.
 - Tool names seen: `Bash`, `PowerShell`, `Read`, `Edit`, `Write`, `Grep`, `Glob`, `WebFetch`, `WebSearch`, `ToolSearch`, `TaskStop`, `Monitor`, `Agent`, `SendUserFile`, `SendFeedback`, and `mcp__<server>__<tool>`.
 - Inputs seen: `Bash`/`PowerShell` `{command, description, timeout?, run_in_background?}`; `Read` `{file_path, offset?, limit?}`; `Edit` `{file_path, old_string, new_string, replace_all}`; `Write` `{file_path, content}`; `Grep` `{pattern, path, output_mode, glob?, -n?, -i?, -A?, head_limit?}`; `Glob` `{pattern, path?}`; MCP tools: arbitrary.
 

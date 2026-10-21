@@ -29,8 +29,19 @@ Version 1 (`schema_version: 1`). New fields can be added without a version bump.
   "near_misses": [ /* NearMiss, closest first */ ],
   // Only with --soft-failures:
   "soft_failures": [ /* SoftFailure, by stream then call */ ],
-  "soft_failure_markers": {"Traceback": 12, "FAILED": 9}  // calls per marker (a call can count for several)
-  // Cost (API-equivalent USD) arrives in M4.
+  "soft_failure_markers": {"Traceback": 12, "FAILED": 9},  // calls per marker (a call can count for several)
+  // Usage and cost (M4; absent when replay runs without prices):
+  "cost": {
+    "basis": "API-equivalent USD",          // usage priced at API rates; subscriptions don't pay per token
+    "tokens": 736609675,                    // input + output + cache writes + cache reads
+    "usage": {"input_tokens": 14418, "output_tokens": 2375441, "cache_write_tokens": 9128457,
+              "cache_read_tokens": 725091359, "cache_write_1h_tokens": 8975335},
+    "cost_usd": 358.02,                     // priced messages only
+    "unpriced_tokens": 0,                   // models without a verified price: cost unknown
+    "unknown_models": [],
+    "wasted_cost_usd": 0,                   // model calls inside loops (union per stream)
+    "sessions": [ /* SessionCost, most expensive first */ ]
+  }
 }
 ```
 
@@ -81,3 +92,7 @@ Version 1 (`schema_version: 1`). New fields can be added without a version bump.
 ```
 
 A loop is one `loop_key` within one human turn of one stream. Call numbers match `loopguard replay --session <id> --calls` and the labels file.
+
+`SessionCost`: `{"session_id", "project", "streams", "tokens", "usage": {…}, "cost_usd", "unpriced_tokens", "wasted_cost_usd"}`; a session's subagent streams are included.
+
+Each `Loop` also has `"cost_usd"` with prices: the API-equivalent cost of the model calls from the one that issued the loop's first call to the one that issued its last.
