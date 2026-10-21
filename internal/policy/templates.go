@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -74,8 +75,11 @@ func (m msg) nudge() string {
 	var b strings.Builder
 	switch m.l.Detector {
 	case event.DetectorRepeatedFailure:
-		fmt.Fprintf(&b, "LoopGuard observation: `%s` has failed %d times %s with the same error", m.family(), m.l.Count, inTheLast(m.elapsed))
-		m.errorLines(&b)
+		// "in a row" and "first failure … ago", not "within the last
+		// minute": the agent read that as a time window.
+		fmt.Fprintf(&b, "LoopGuard observation: `%s` has failed %d times in a row with the same error (first failure %s).\n",
+			m.family(), m.l.Count, ago(m.elapsed))
+		writeExcerpt(&b, m.l.Evidence.ErrorLines)
 		if files := m.files(); files != "" {
 			fmt.Fprintf(&b, "Between attempts, these files were edited: %s. The error did not change after any of these edits.\n", files)
 		} else {
@@ -83,8 +87,8 @@ func (m msg) nudge() string {
 		}
 		b.WriteString("Repeating similar edits is unlikely to change the result. " + optionsHelp)
 	case event.DetectorExactRepeat:
-		fmt.Fprintf(&b, "LoopGuard observation: the same `%s` call has run %d times %s with the same result, and no file was changed in between.\n",
-			m.family(), m.l.Count, inTheLast(m.elapsed))
+		fmt.Fprintf(&b, "LoopGuard observation: the same `%s` call has run %d times with the same result (first run %s), and no file was changed in between.\n",
+			m.family(), m.l.Count, ago(m.elapsed))
 		if cmds := m.l.Evidence.Commands; len(cmds) > 0 {
 			fmt.Fprintf(&b, "  %s\n", clipRunes(redact.String(cmds[len(cmds)-1]), maxLineLen))
 		}
@@ -93,9 +97,24 @@ func (m msg) nudge() string {
 	case event.DetectorOscillation:
 		fmt.Fprintf(&b, "LoopGuard observation: %s has been changed back to a previous version %d times (the same edit was made and then reverted). "+
 			"Switching between the same versions is unlikely to change the result. %s", m.path(), m.l.Count, optionsHelp)
+	case event.DetectorReadThrash:
+		if m.path() != "" {
+			fmt.Fprintf(&b, "LoopGuard observation: %s has been read %d times (first read %s) with no change to it in between, and little else has changed. "+
+				"Reading it again is unlikely to show anything new.", m.path(), m.l.Count, ago(m.elapsed))
+		} else {
+			fmt.Fprintf(&b, "LoopGuard observation: the same `%s` search has run %d times with the same result (first run %s). "+
+				"Running it again will give the same result.", m.family(), m.l.Count, ago(m.elapsed))
+		}
+		b.WriteString(" Options that often help: working from what was already found, looking for the specific thing needed, " +
+			"trying a different approach, or asking the user.")
+	case event.DetectorStall:
+		ev := m.l.Evidence
+		fmt.Fprintf(&b, "LoopGuard observation: the last %d tool calls made no visible progress: %s failed and %s repeated earlier reads or searches "+
+			"(the first of these calls was %s). Options that often help: restating the goal and what is known so far, "+
+			"trying a different approach, or asking the user.", m.l.Count, plural(ev.Failures, "call"), plural(ev.Repeats, "call"), ago(m.elapsed))
 	default:
-		fmt.Fprintf(&b, "LoopGuard observation: %s has signaled %d times %s with no progress in between. %s",
-			strings.ReplaceAll(m.l.Detector, "_", " "), m.l.Count, inTheLast(m.elapsed), optionsHelp)
+		fmt.Fprintf(&b, "LoopGuard observation: %s has signaled %d times (first %s) with no progress in between. %s",
+			strings.ReplaceAll(m.l.Detector, "_", " "), m.l.Count, ago(m.elapsed), optionsHelp)
 	}
 	return clipRunes(b.String(), MaxMessage)
 }
@@ -158,26 +177,66 @@ func (m msg) haltReason(byTime bool, minutes, limit float64) string {
 	return fmt.Sprintf("a %s loop went on and %s", strings.ReplaceAll(m.l.Detector, "_", " "), why)
 }
 
-// errorLines writes ":" and up to three redacted error lines, or ".".
-func (m msg) errorLines(b *strings.Builder) {
-	lines := redact.Lines(m.l.Evidence.ErrorLines)
-	n := 0
-	for _, line := range lines {
+// writeExcerpt writes up to three lines of tool output as a quoted block:
+// "Output excerpt:" and the lines, indented. Tool output can carry text
+// from anywhere (a test fixture, a web page, a log line), so it is shown
+// only as a quote, never inside LoopGuard's own sentences: secrets are
+// redacted, markup-like tags and control characters removed, and each
+// line clipped (Excerpt). Nothing is written if no line is left.
+func writeExcerpt(b *strings.Builder, lines []string) {
+	ex := Excerpt(lines)
+	if len(ex) == 0 {
+		return
+	}
+	b.WriteString("Output excerpt:\n")
+	for _, line := range ex {
+		b.WriteString(excerptIndent + line + "\n")
+	}
+}
+
+const excerptIndent = "    "
+
+// tagRE matches markup-like tags: <name ...>, </name>, <name/>, comments,
+// and <!...>/<?...> declarations. `Map<K, V>` is not a tag.
+var tagRE = regexp.MustCompile(`<!--[\s\S]*?-->|<[!?][^<>]*>|</?[A-Za-z][\w:.-]*(?:\s[^<>]*)?/?>`)
+
+// placeholderRE matches LoopGuard's own placeholders, which look like
+// tags but are kept: the normalizer's (<N>, <TS>, …) and redaction's
+// (<REDACTED:type>). Exact names only, so an <IMPORTANT> from the output
+// is still removed.
+var placeholderRE = regexp.MustCompile(`^<(?:DUR|ID|LN|N|TMP|TS|HOME|REDACTED:[a-z_]+)>$`)
+
+// Excerpt cleans tool output lines for quoting (writeExcerpt): redacted,
+// tags and control characters removed, whitespace trimmed, empty lines
+// dropped, each clipped at 160 characters, at most 3.
+func Excerpt(lines []string) []string {
+	var out []string
+	for _, line := range redact.Lines(lines) {
+		line = tagRE.ReplaceAllStringFunc(line, func(tag string) string {
+			if placeholderRE.MatchString(tag) {
+				return tag
+			}
+			return ""
+		})
+		line = strings.Map(func(r rune) rune {
+			switch {
+			case r == '\t':
+				return ' '
+			case r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == ' ' || r == ' ':
+				return -1
+			}
+			return r
+		}, line)
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		if n == 0 {
-			b.WriteString(":\n")
-		}
-		fmt.Fprintf(b, "  %s\n", clipRunes(line, maxLineLen))
-		if n++; n == maxErrorLines {
+		out = append(out, clipRunes(line, maxLineLen))
+		if len(out) == maxErrorLines {
 			break
 		}
 	}
-	if n == 0 {
-		b.WriteString(".\n")
-	}
+	return out
 }
 
 // files lists the files edited between attempts.
@@ -197,18 +256,14 @@ func (m msg) files() string {
 	return strings.Join(out, ", ")
 }
 
-func inTheLast(d time.Duration) string {
+// ago says when a loop's first call was: "less than a minute ago", "3 min
+// ago". A point in time, not a window: "failed 4 times within the last
+// minute" read as a time window to the agent.
+func ago(d time.Duration) string {
 	if d < time.Minute {
-		return "within the last minute"
+		return "less than a minute ago"
 	}
-	return fmt.Sprintf("in the last %d min", int(d.Minutes()+0.5))
-}
-
-func over(d time.Duration) string {
-	if d < time.Minute {
-		return "within a minute"
-	}
-	return fmt.Sprintf("over %d min", int(d.Minutes()+0.5))
+	return fmt.Sprintf("%d min ago", int(d.Minutes()+0.5))
 }
 
 func plural(n int, word string) string {
