@@ -88,10 +88,10 @@ Goal: `loopguard replay --since 30d` prints a correct report of loops in your pa
 - [x] Policy: full state machine: nudge → deny → halt, cooldowns, reset on progress, permission-mode awareness (LLD §7)
 - [x] Claude Code rendering: `additionalContext` on PostToolUse/PostToolUseFailure, `permissionDecision: "deny"` on PreToolUse, `continue:false` + `stopReason` for halt
 - [x] Message templates (factual tone, LLD §7.3) with the evidence filled in
-- [ ] D4 read thrash, D5 stall
+- [x] D4 read thrash, D5 stall
 - [x] Intervention outcome tracking (`recovered` / `continued_loop`) 10 calls after each intervention
-- [ ] `internal/notify`: desktop, terminal sequence, ntfy, Slack/Discord webhook
-- [x] `loopguard pause [--session|--repo|--all] [--for]` / `resume`; `LOOPGUARD_DISABLE=1`; `enabled: false` in `.loopguard.yaml`; `loopguard mode`, `loopguard stats`
+- [x] `internal/notify`: desktop, terminal sequence, ntfy, Slack/Discord webhook; levels observe/notify/assist/guard; `loopguard stop`
+- [x] `loopguard pause [--session|--repo|--all] [--for]` / `resume`; `LOOPGUARD_DISABLE=1`; `enabled: false` (config.yaml since M3-C); `loopguard mode`, `loopguard stats`
 - [x] Observe-mode-for-3-days default; `init --enforce` to skip
 - [ ] **Stuck-task test repo** (TDD §6.1): 4–5 tasks that reliably make agents loop. Use it for manual and e2e testing.
 - [ ] e2e test: `claude -p` on a stuck task → assert the nudge is in the transcript and a halt happens
