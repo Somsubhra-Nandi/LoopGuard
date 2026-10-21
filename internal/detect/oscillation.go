@@ -48,7 +48,7 @@ func (d *Oscillation) Observe(s *session.SessionState, c *event.ToolCall) []even
 		sig := event.Signal{
 			Detector: d.Name(),
 			LoopKey:  "os:" + c.FilePath,
-			Severity: clamp01(base + 0.1*float64(count-d.MinRevisits)),
+			Severity: clamp01(base + float64(0.1*float64(count-d.MinRevisits))),
 			Count:    count,
 			Since:    seqs[0],
 			Evidence: event.Evidence{Path: c.FilePath, Files: []string{c.FilePath}, Seqs: seqs},

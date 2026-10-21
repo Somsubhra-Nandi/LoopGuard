@@ -186,18 +186,21 @@ func (p *Pricing) Cost(m Message) (usd float64, ok bool) {
 	if strings.EqualFold(m.Geo, "us") && mp.USMultiplier > 0 {
 		mult *= mp.USMultiplier
 	}
-	return mult * r.cost(m.Usage), true
+	return float64(mult * r.cost(m.Usage)), true
 }
 
-// cost is u priced at r, without multipliers.
+// cost is u priced at r, without multipliers. Each product is wrapped in
+// float64() so the compiler can't fuse it with the sum into an FMA (Go
+// allows that on arm64, ppc64 and s390x), which would change the last bits
+// and make results differ by platform.
 func (r Rates) cost(u Usage) float64 {
 	oneHour := r.CacheWrite1h
 	if oneHour == 0 {
 		oneHour = r.CacheWrite
 	}
 	fiveMin := u.CacheWrite - u.CacheWrite1h
-	return (float64(u.Input)*r.Input + float64(u.Output)*r.Output + float64(fiveMin)*r.CacheWrite +
-		float64(u.CacheWrite1h)*oneHour + float64(u.CacheRead)*r.CacheRead) / 1e6
+	return (float64(float64(u.Input)*r.Input) + float64(float64(u.Output)*r.Output) + float64(float64(fiveMin)*r.CacheWrite) +
+		float64(float64(u.CacheWrite1h)*oneHour) + float64(float64(u.CacheRead)*r.CacheRead)) / 1e6
 }
 
 // InputRate and CacheReadRate return a model's per-token price of plain

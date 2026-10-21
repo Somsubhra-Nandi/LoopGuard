@@ -333,13 +333,14 @@ func (s *Scanner) Summarize(p *Pricing) Summary {
 		}
 		outRate, okOut := p.OutputRate(m.Model)
 		e.Priced = okOut
-		e.EstUSD = e.OutputTokens * outRate
+		// float64() keeps these products from fusing into FMAs; see Rates.cost.
+		e.EstUSD = float64(e.OutputTokens * outRate)
 		if u.result {
 			e.ResultTokens = (u.chars + CharsPerToken - 1) / CharsPerToken
 			// No later call in the result's segment: a compaction came first.
 			if u.after < len(msgs) && s.segOf[u.after] == u.seg {
 				e.LaterCalls = count[u.after]
-				e.EstUSD += float64(e.ResultTokens) * suffix[u.after]
+				e.EstUSD += float64(float64(e.ResultTokens) * suffix[u.after])
 			}
 		}
 		total += e.EstUSD

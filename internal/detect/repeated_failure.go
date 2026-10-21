@@ -96,7 +96,7 @@ func (d *RepeatedFailure) Observe(s *session.SessionState, c *event.ToolCall) []
 			files = appendUnique(files, w.FilePath)
 		}
 	}
-	sev := 0.55 + 0.1*float64(count-d.MinCount)
+	sev := 0.55 + float64(0.1*float64(count-d.MinCount))
 	for _, n := range gapsByFile {
 		if n >= 2 {
 			sev += 0.1

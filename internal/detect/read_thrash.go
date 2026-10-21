@@ -87,7 +87,7 @@ func (d *ReadThrash) Observe(s *session.SessionState, c *event.ToolCall) []event
 	return []event.Signal{{
 		Detector: d.Name(),
 		LoopKey:  key,
-		Severity: min(0.6, 0.55+0.05*float64(count-need)),
+		Severity: min(0.6, 0.55+float64(0.05*float64(count-need))),
 		Count:    count,
 		Since:    seqs[0],
 		Evidence: ev,

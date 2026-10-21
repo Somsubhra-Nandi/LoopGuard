@@ -62,7 +62,7 @@ func (d *ExactRepeat) Observe(s *session.SessionState, c *event.ToolCall) []even
 	return []event.Signal{{
 		Detector: d.Name(),
 		LoopKey:  "er:" + hex(c.ActionFP),
-		Severity: clamp01(0.5 + 0.15*float64(count-d.MinCount)),
+		Severity: clamp01(0.5 + float64(0.15*float64(count-d.MinCount))),
 		Count:    count,
 		Since:    seqs[0],
 		Evidence: ev,
