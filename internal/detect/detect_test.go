@@ -56,11 +56,13 @@ func TestDedupSameKey(t *testing.T) {
 
 func TestEngineRespectsEnabled(t *testing.T) {
 	th := config.Default()
-	if n := len(New(th).Detectors()); n != 3 {
-		t.Errorf("default detectors = %d, want 3", n)
+	if n := len(New(th).Detectors()); n != 5 {
+		t.Errorf("default detectors = %d, want 5", n)
 	}
 	th.Detectors.ExactRepeat.Enabled = false
 	th.Detectors.Oscillation.Enabled = false
+	th.Detectors.ReadThrash.Enabled = false
+	th.Detectors.Stall.Enabled = false
 	ds := New(th).Detectors()
 	if len(ds) != 1 || ds[0].Name() != event.DetectorRepeatedFailure {
 		t.Errorf("detectors = %v", ds)

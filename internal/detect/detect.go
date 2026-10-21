@@ -41,7 +41,12 @@ func New(th config.Thresholds) *Engine {
 			Window: d.Window, MinRevisits: d.Oscillation.MinRevisits, RevisitWindow: d.Oscillation.RevisitWindow,
 		})
 	}
-	// TODO(M3): D4 read thrash and D5 no-progress stall.
+	if d.ReadThrash.Enabled {
+		e.detectors = append(e.detectors, &ReadThrash{Window: d.Window, MinReads: d.ReadThrash.MinReads})
+	}
+	if d.Stall.Enabled {
+		e.detectors = append(e.detectors, &Stall{Window: d.Stall.Window})
+	}
 	// TODO(M4): D6 budget.
 	return e
 }
