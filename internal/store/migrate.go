@@ -107,6 +107,23 @@ CREATE TABLE pauses (
 );
 CREATE INDEX idx_interventions_ts ON interventions(ts);
 `,
+	// 4: usage per stream with what pricing needs (M4), and `loopguard stop`
+	// requests that survive a daemon restart.
+	`
+ALTER TABLE usage ADD COLUMN session_id TEXT;
+ALTER TABLE usage ADD COLUMN repo TEXT;
+ALTER TABLE usage ADD COLUMN cache_write_1h INTEGER DEFAULT 0;
+ALTER TABLE usage ADD COLUMN speed TEXT;
+ALTER TABLE usage ADD COLUMN geo TEXT;
+CREATE INDEX idx_usage_ts ON usage(ts);
+CREATE INDEX idx_usage_session ON usage(session_id);
+CREATE INDEX idx_calls_ts ON calls(ts);
+CREATE TABLE stop_requests (
+  session_id   TEXT PRIMARY KEY,
+  requested_at INTEGER NOT NULL,          -- unix ms
+  recorded     INTEGER NOT NULL DEFAULT 0 -- the halt was recorded as an intervention
+);
+`,
 }
 
 // migrate creates schema_migrations if needed and applies the migrations
