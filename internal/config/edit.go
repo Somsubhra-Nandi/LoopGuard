@@ -7,11 +7,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// Edit changes one top-level key of a config file.
+// Edit changes one key of a config file: a top-level key, or a dotted
+// path into nested mappings ("notify.ntfy.topic").
 type Edit struct {
 	Key    string
 	Value  string // a plain YAML scalar
@@ -21,7 +23,7 @@ type Edit struct {
 const newFileHeader = "# LoopGuard configuration: see docs/LLD.md §12 for every key.\n" +
 	"# Written by loopguard (init, mode); comments and other keys are kept.\n"
 
-// EditFile applies edits to the top-level keys of the YAML file at path,
+// EditFile applies edits to the keys of the YAML file at path,
 // creating it if needed. Comments, key order, and other keys are kept
 // (the file is re-encoded, so indentation is normalized). The result must
 // still be a valid config; a file that isn't valid YAML is refused,
@@ -46,11 +48,26 @@ func EditFile(path string, edits ...Edit) error {
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
 		return fmt.Errorf("%s: the top level is not a mapping, not editing it", path)
 	}
-	m := doc.Content[0]
 	for _, e := range edits {
+		m, key := doc.Content[0], e.Key
+		// A dotted key ("notify.ntfy.topic") goes through nested mappings,
+		// created as needed; a scalar in the way (`ntfy: true`) is replaced.
+		for {
+			parent, rest, nested := strings.Cut(key, ".")
+			if !nested {
+				break
+			}
+			if m = child(m, parent, !e.Remove); m == nil {
+				break
+			}
+			key = rest
+		}
+		if m == nil {
+			continue // removing a key whose parent doesn't exist
+		}
 		i := -1
 		for k := 0; k+1 < len(m.Content); k += 2 {
-			if m.Content[k].Value == e.Key {
+			if m.Content[k].Value == key {
 				i = k
 				break
 			}
@@ -64,7 +81,7 @@ func EditFile(path string, edits ...Edit) error {
 			*v = yaml.Node{Kind: yaml.ScalarNode, Value: e.Value, LineComment: v.LineComment, HeadComment: v.HeadComment}
 		default:
 			m.Content = append(m.Content,
-				&yaml.Node{Kind: yaml.ScalarNode, Value: e.Key},
+				&yaml.Node{Kind: yaml.ScalarNode, Value: key},
 				&yaml.Node{Kind: yaml.ScalarNode, Value: e.Value})
 		}
 	}
@@ -81,6 +98,34 @@ func EditFile(path string, edits ...Edit) error {
 		return fmt.Errorf("the edited %s would be invalid: %w", filepath.Base(path), err)
 	}
 	return writeAtomic(path, b.Bytes())
+}
+
+// child returns the mapping under key in m, creating it (or replacing a
+// non-mapping value) when create is set; nil otherwise.
+func child(m *yaml.Node, key string, create bool) *yaml.Node {
+	for k := 0; k+1 < len(m.Content); k += 2 {
+		if m.Content[k].Value != key {
+			continue
+		}
+		v := m.Content[k+1]
+		if v.Kind == yaml.MappingNode {
+			if v.Style&yaml.FlowStyle != 0 {
+				v.Style = 0 // block style, so added keys get their own lines
+			}
+			return v
+		}
+		if !create {
+			return nil
+		}
+		*v = yaml.Node{Kind: yaml.MappingNode, HeadComment: v.HeadComment, LineComment: v.LineComment}
+		return v
+	}
+	if !create {
+		return nil
+	}
+	v := &yaml.Node{Kind: yaml.MappingNode}
+	m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: key}, v)
+	return v
 }
 
 func writeAtomic(path string, b []byte) error {
