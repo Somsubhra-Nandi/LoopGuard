@@ -16,14 +16,12 @@ const (
 	EventDeny         = "deny"          // a deny reached the agent
 	EventHalt         = "halt"          // a halt reached the agent
 	EventStall        = "stall"         // no progress for a while (D5)
+	EventBudgetSoft   = "budget_soft"   // a soft budget was passed (D6)
+	EventBudgetHard   = "budget_hard"   // a hard budget was passed (D6)
 )
 
 // Events lists the notification events.
-var Events = []string{EventLoopDetected, EventNudge, EventDeny, EventHalt, EventStall}
-
-// futureEvents are accepted in on: lists, so a config written from an
-// older LLD sample stays valid, but nothing sends them yet (M4: budgets).
-var futureEvents = []string{"budget_soft", "budget_hard"}
+var Events = []string{EventLoopDetected, EventNudge, EventDeny, EventHalt, EventStall, EventBudgetSoft, EventBudgetHard}
 
 // Notification channels.
 const (
@@ -80,11 +78,11 @@ func (n Notify) Channels() map[string]Channel {
 	return map[string]Channel{ChannelDesktop: n.Desktop, ChannelTerminal: n.Terminal, ChannelNtfy: n.Ntfy, ChannelWebhook: n.Webhook}
 }
 
-// DefaultNotify returns the defaults: desktop notifications for loops and
-// halts, nothing else.
+// DefaultNotify returns the defaults: desktop notifications for loops,
+// halts, and budgets passed, nothing else.
 func DefaultNotify() Notify {
 	return Notify{
-		On:       []string{EventLoopDetected, EventHalt},
+		On:       []string{EventLoopDetected, EventHalt, EventBudgetSoft, EventBudgetHard},
 		Desktop:  Channel{Enabled: true},
 		Terminal: Channel{},
 		Ntfy:     Channel{Server: DefaultNtfyServer},
@@ -184,7 +182,7 @@ func (f *NotifyFile) validate(bad func(string, ...any)) {
 			return
 		}
 		for _, e := range *on {
-			if !slices.Contains(Events, e) && !slices.Contains(futureEvents, e) {
+			if !slices.Contains(Events, e) {
 				bad("%s: unknown event %q (use %v)", key, e, Events)
 			}
 		}

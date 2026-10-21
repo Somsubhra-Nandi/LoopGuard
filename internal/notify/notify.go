@@ -28,6 +28,9 @@ type Notification struct {
 	Family   string // command family (D1/D2), or the tool (D4)
 	Count    int
 	Duration time.Duration
+	// Budget describes a budget passed (budget events only), e.g. "session
+	// cost $15.40 (API-equivalent), hard limit $15.00": numbers only.
+	Budget string
 	// SessionKey and LoopKey identify the loop for rate limiting; they are
 	// never sent.
 	SessionKey, LoopKey string
@@ -77,6 +80,10 @@ func (n Notification) Body() string {
 		s = "Blocked a repeated action: " + what
 	case config.EventHalt:
 		return "Stopped the turn: " + what + ". Your next message continues normally."
+	case config.EventBudgetSoft:
+		s = "Budget passed: " + cleanBudget(n.Budget)
+	case config.EventBudgetHard:
+		return "Hard budget passed: " + cleanBudget(n.Budget) + ". At the guard level, tool calls stop until the limit is raised."
 	default:
 		s = what
 	}
@@ -167,4 +174,19 @@ func shortID(key string) string {
 		key = key[:8]
 	}
 	return cleanName(key, 8)
+}
+
+// cleanBudget keeps a budget summary's letters, digits, spaces, and
+// . _ - + : $ ( ) , ' and clips it at 120 characters.
+func cleanBudget(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune(" ._-+:$(),'", r) {
+			return r
+		}
+		return -1
+	}, s)
+	if r := []rune(s); len(r) > 120 {
+		s = string(r[:120])
+	}
+	return s
 }
