@@ -1,0 +1,39 @@
+LoopGuard report: session 5e551011-0000-4000-8000-000000000001 (C--Users-dev-work-shop)
+replayed from the transcript (LoopGuard did not watch it live); costs are API-equivalent
+
+  Turns 2, tool calls 12 (5 failed), loops 1
+  Tokens 240.6k: input 36, output 600, cache write 0, cache read 240.0k
+  Cost $0.06 API-equivalent; inside loops $0.05 over 2m
+
+Main session: 12 tool calls (5 failed), 240.6k tokens, $0.06
+  Turn 1  +0:00  10 calls, 5 failed, 200.5k tokens, $0.05
+    call 1         bash: jest ×1, 1 failed
+    call 2         edit src/cart.js ×1
+    call 3         bash: jest ×1, 1 failed
+    call 4         edit src/cart.js ×1
+    call 5         bash: jest ×1, 1 failed
+    call 6         edit src/cart.js ×1
+    call 7         bash: jest ×1, 1 failed
+    call 8         edit src/cart.js ×1
+    call 9         bash: jest ×1, 1 failed
+    call 10        read logs/big.log ×1
+    LOOP repeated_failure `jest`: calls 1-9 (5 calls, +0:00 to +2:56, $0.05)
+      LoopGuard: would nudge at call 7; outcome not tracked (replay)
+  Turn 2  +3:45  2 calls, 0 failed, 40.1k tokens, $0.01
+    call 11        bash: ls src ×1
+    call 12        bash: git status ×1
+
+Top 5 by estimated cost (est.), this session ($0.06 in all)
+  family or tool + target                        runs     avg output   est. cost  est. share
+  read logs/big.log                                 1      50.0k tok       $0.02       34.9%
+  bash: jest                                        5         78 tok     $0.0055        9.2%
+  edit src/cart.js                                  4         16 tok     $0.0041        6.8%
+  bash: ls src                                      1          4 tok     $0.0010        1.7%
+  bash: git status                                  1          2 tok     $0.0010        1.7%
+
+  Largest outputs (est. cost of a single result)
+  5e551011               call 10    read logs/big.log                         50.0k tok, carried    2×  est. $0.02 (34.9%)
+  5e551011               call 1     bash: jest                                   78 tok, carried   11×  est. $0.0012 (1.9%)
+  5e551011               call 3     bash: jest                                   78 tok, carried    9×  est. $0.0011 (1.9%)
+  5e551011               call 5     bash: jest                                   78 tok, carried    7×  est. $0.0011 (1.8%)
+  5e551011               call 7     bash: jest                                   78 tok, carried    5×  est. $0.0011 (1.8%)

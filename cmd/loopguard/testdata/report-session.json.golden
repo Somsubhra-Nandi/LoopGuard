@@ -1,0 +1,250 @@
+{
+  "basis": "API-equivalent USD",
+  "session_id": "5e551011-0000-4000-8000-000000000001",
+  "project": "C--Users-dev-work-shop",
+  "live_data": false,
+  "totals": {
+    "tool_calls": 12,
+    "failures": 5,
+    "turns": 2,
+    "tokens": 240636,
+    "usage": {
+      "input_tokens": 36,
+      "output_tokens": 600,
+      "cache_write_tokens": 0,
+      "cache_read_tokens": 240000
+    },
+    "cost_usd": 0.06014400000000001,
+    "unpriced_tokens": 0,
+    "unknown_models": [],
+    "loops": 1,
+    "loop_seconds": 176,
+    "loop_cost_usd": 0.045108
+  },
+  "streams": [
+    {
+      "stream": "main",
+      "tool_calls": 12,
+      "failures": 5,
+      "tokens": 240636,
+      "cost_usd": 0.06014400000000001,
+      "turns": [
+        {
+          "turn": 1,
+          "start_seconds": 0,
+          "tool_calls": 10,
+          "failures": 5,
+          "tokens": 200530,
+          "cost_usd": 0.050120000000000005,
+          "calls": [
+            {
+              "from_call": 1,
+              "to_call": 1,
+              "label": "bash: jest",
+              "count": 1,
+              "failed": 1
+            },
+            {
+              "from_call": 2,
+              "to_call": 2,
+              "label": "edit src/cart.js",
+              "count": 1,
+              "failed": 0
+            },
+            {
+              "from_call": 3,
+              "to_call": 3,
+              "label": "bash: jest",
+              "count": 1,
+              "failed": 1
+            },
+            {
+              "from_call": 4,
+              "to_call": 4,
+              "label": "edit src/cart.js",
+              "count": 1,
+              "failed": 0
+            },
+            {
+              "from_call": 5,
+              "to_call": 5,
+              "label": "bash: jest",
+              "count": 1,
+              "failed": 1
+            },
+            {
+              "from_call": 6,
+              "to_call": 6,
+              "label": "edit src/cart.js",
+              "count": 1,
+              "failed": 0
+            },
+            {
+              "from_call": 7,
+              "to_call": 7,
+              "label": "bash: jest",
+              "count": 1,
+              "failed": 1
+            },
+            {
+              "from_call": 8,
+              "to_call": 8,
+              "label": "edit src/cart.js",
+              "count": 1,
+              "failed": 0
+            },
+            {
+              "from_call": 9,
+              "to_call": 9,
+              "label": "bash: jest",
+              "count": 1,
+              "failed": 1
+            },
+            {
+              "from_call": 10,
+              "to_call": 10,
+              "label": "read logs/big.log",
+              "count": 1,
+              "failed": 0
+            }
+          ],
+          "loops": [
+            {
+              "detector": "repeated_failure",
+              "loop_key": "rf:jest:e58c9999b0014abc",
+              "subject": "`jest`",
+              "first_call": 1,
+              "last_call": 9,
+              "count": 5,
+              "start_seconds": 0,
+              "end_seconds": 176,
+              "cost_usd": 0.045108,
+              "actions": [
+                {
+                  "action": "nudge",
+                  "kind": "replay",
+                  "call": 7
+                }
+              ],
+              "outcome": "not tracked (replay)"
+            }
+          ]
+        },
+        {
+          "turn": 2,
+          "start_seconds": 225,
+          "tool_calls": 2,
+          "failures": 0,
+          "tokens": 40106,
+          "cost_usd": 0.010024,
+          "calls": [
+            {
+              "from_call": 11,
+              "to_call": 11,
+              "label": "bash: ls src",
+              "count": 1,
+              "failed": 0
+            },
+            {
+              "from_call": 12,
+              "to_call": 12,
+              "label": "bash: git status",
+              "count": 1,
+              "failed": 0
+            }
+          ],
+          "loops": []
+        }
+      ]
+    }
+  ],
+  "estimates": {
+    "window": "this session",
+    "streams": 1,
+    "cost_usd": 0.06014400000000001,
+    "top": [
+      {
+        "group": "read logs/big.log",
+        "runs": 1,
+        "avg_result_tokens": 50000,
+        "est_usd": 0.021,
+        "est_share": 0.3491620111731843
+      },
+      {
+        "group": "bash: jest",
+        "runs": 5,
+        "avg_result_tokens": 78,
+        "est_usd": 0.005546000000000001,
+        "est_share": 0.0922120244745943
+      },
+      {
+        "group": "edit src/cart.js",
+        "runs": 4,
+        "avg_result_tokens": 16,
+        "est_usd": 0.0040896,
+        "est_share": 0.06799680766161212
+      },
+      {
+        "group": "bash: ls src",
+        "runs": 1,
+        "avg_result_tokens": 4,
+        "est_usd": 0.0010008,
+        "est_share": 0.016640063846767757
+      },
+      {
+        "group": "bash: git status",
+        "runs": 1,
+        "avg_result_tokens": 2,
+        "est_usd": 0.001,
+        "est_share": 0.0166267624368183
+      }
+    ],
+    "largest_outputs": [
+      {
+        "session_id": "5e551011-0000-4000-8000-000000000001",
+        "group": "read logs/big.log",
+        "call": 10,
+        "result_tokens": 50000,
+        "later_calls": 2,
+        "est_usd": 0.021,
+        "est_share": 0.3491620111731843
+      },
+      {
+        "session_id": "5e551011-0000-4000-8000-000000000001",
+        "group": "bash: jest",
+        "call": 1,
+        "result_tokens": 78,
+        "later_calls": 11,
+        "est_usd": 0.0011716,
+        "est_share": 0.01947991487097632
+      },
+      {
+        "session_id": "5e551011-0000-4000-8000-000000000001",
+        "group": "bash: jest",
+        "call": 3,
+        "result_tokens": 78,
+        "later_calls": 9,
+        "est_usd": 0.0011404,
+        "est_share": 0.01896115988294759
+      },
+      {
+        "session_id": "5e551011-0000-4000-8000-000000000001",
+        "group": "bash: jest",
+        "call": 5,
+        "result_tokens": 78,
+        "later_calls": 7,
+        "est_usd": 0.0011092,
+        "est_share": 0.01844240489491886
+      },
+      {
+        "session_id": "5e551011-0000-4000-8000-000000000001",
+        "group": "bash: jest",
+        "call": 7,
+        "result_tokens": 78,
+        "later_calls": 5,
+        "est_usd": 0.001078,
+        "est_share": 0.017923649906890125
+      }
+    ]
+  }
+}

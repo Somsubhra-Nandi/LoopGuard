@@ -3,8 +3,9 @@
 // nudges, blocks, or halts the agent.
 //
 // Replay (offline detection), the hook, the daemon (levels observe, notify,
-// assist, guard), notifications, mode, pause, resume, stop, and stats work; report is a placeholder
-// until its milestone, see plan.md.
+// assist, guard), notifications, mode, pause, resume, stop, stats, and
+// report (usage, API-equivalent cost, budgets) work; see plan.md for what
+// comes next.
 package main
 
 import (
@@ -94,7 +95,7 @@ func newRootCmd(hookExit *int) *cobra.Command {
 		newDoctorCmd(),
 		newStatusCmd(),
 		newCaptureCmd(),
-		stubCmd("report [session]", "Show a session timeline: calls, loops, interventions, cost", "M4"),
+		newReportCmd(),
 		newReplayCmd(),
 		newLabelCmd(),
 		newEvalCmd(),
@@ -151,20 +152,6 @@ func newVersionCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			_, err := fmt.Fprintf(cmd.OutOrStdout(), "loopguard %s\ncommit: %s\nbuilt:  %s\n", version, commit, date)
-			return err
-		},
-	}
-}
-
-// stubCmd returns a placeholder subcommand for work scheduled in a later milestone.
-func stubCmd(use, short, milestone string) *cobra.Command {
-	return &cobra.Command{
-		Use:                use,
-		Short:              short + " (milestone " + milestone + ")",
-		Args:               cobra.ArbitraryArgs,
-		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			_, err := fmt.Fprintf(cmd.OutOrStdout(), "not implemented yet (milestone %s)\n", milestone)
 			return err
 		},
 	}

@@ -168,28 +168,6 @@ func TestHookFailsOpen(t *testing.T) {
 	}
 }
 
-func TestStubSubcommands(t *testing.T) {
-	cases := []struct {
-		args      []string
-		milestone string
-	}{
-		{[]string{"report"}, "M4"},
-		{[]string{"report", "abc123"}, "M4"},
-	}
-	for _, tc := range cases {
-		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			if code := run(tc.args, strings.NewReader(""), &stdout, &stderr); code != 0 {
-				t.Fatalf("exit code = %d, want 0 (stderr: %q)", code, stderr.String())
-			}
-			want := "not implemented yet (milestone " + tc.milestone + ")\n"
-			if stdout.String() != want {
-				t.Errorf("stdout = %q, want %q", stdout.String(), want)
-			}
-		})
-	}
-}
-
 func TestVersion(t *testing.T) {
 	oldVersion, oldCommit, oldDate := version, commit, date
 	t.Cleanup(func() { version, commit, date = oldVersion, oldCommit, oldDate })
