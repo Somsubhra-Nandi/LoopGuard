@@ -108,12 +108,22 @@ type reader struct {
 // prompt events. Lines can be arbitrarily long. Unknown and malformed lines
 // are skipped and counted; an I/O error stops the read and is returned.
 func ReadStream(r io.Reader, st Stream, emit Emit) (LineStats, error) {
+	return ReadStreamLines(r, st, emit, nil)
+}
+
+// ReadStreamLines is ReadStream that also passes every raw line to lines
+// (if not nil) before the line's events are emitted, so cost accounting
+// reads usage in the same pass (cost.Scanner).
+func ReadStreamLines(r io.Reader, st Stream, emit Emit, lines func([]byte)) (LineStats, error) {
 	rd := &reader{st: st, emit: emit, pending: make(map[string]pendingUse)}
 	br := bufio.NewReaderSize(r, 256<<10)
 	for {
 		b, err := br.ReadBytes('\n')
 		if len(bytes.TrimSpace(b)) > 0 {
 			rd.stats.Lines++
+			if lines != nil {
+				lines(b)
+			}
 			rd.line(b)
 		}
 		if errors.Is(err, io.EOF) {

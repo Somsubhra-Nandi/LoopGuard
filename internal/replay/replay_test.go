@@ -221,10 +221,13 @@ func TestReport(t *testing.T) {
 	if err := r.WriteText(&text); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Loops found          3", "repeated_failure", "`jest`", "would have: nudged at call 7", "M4"} {
+	for _, want := range []string{"Loops found          3", "repeated_failure", "`jest`", "would have: nudged at call 7"} {
 		if !strings.Contains(text.String(), want) {
 			t.Errorf("text report missing %q:\n%s", want, text.String())
 		}
+	}
+	if strings.Contains(text.String(), "Cost") {
+		t.Errorf("cost lines without pricing:\n%s", text.String())
 	}
 	var js bytes.Buffer
 	if err := r.WriteJSON(&js); err != nil {

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
 )
 
 // SchemaVersion is the version of the JSON report. Bump it on any
@@ -29,11 +31,12 @@ type Report struct {
 	BelowThreshold    int            `json:"below_threshold_signals"`
 	WastedSeconds     float64        `json:"wasted_seconds"`
 	WastedToolCalls   int            `json:"wasted_tool_calls"`
-	// TODO(M4): API-equivalent cost of the wasted calls, from transcript usage.
-	Lines      LineStats `json:"lines"`
-	Errors     []string  `json:"errors"`
-	TopLoops   []*Loop   `json:"top_loops"`
-	ElapsedSec float64   `json:"elapsed_seconds"`
+	// Cost is the usage and API-equivalent cost (absent without pricing).
+	Cost       *ReportCost `json:"cost,omitempty"`
+	Lines      LineStats   `json:"lines"`
+	Errors     []string    `json:"errors"`
+	TopLoops   []*Loop     `json:"top_loops"`
+	ElapsedSec float64     `json:"elapsed_seconds"`
 
 	// The shape of real failures (detection-free).
 	FailureFamilies []FamilyFailures `json:"failure_families"` // top 10 families by failures
@@ -54,6 +57,8 @@ type ReportOptions struct {
 	NearMisses int
 	// SoftFailures lists the soft-failure calls and counts per marker.
 	SoftFailures bool
+	// Pricing formats costs (the display currency); nil: USD only.
+	Pricing *cost.Pricing
 }
 
 // topFamilies is how many command families the failure table shows.
@@ -103,6 +108,9 @@ func NewReport(res *Result, path string, since time.Time, opts ReportOptions, no
 		}
 	}
 	r.FailureStreaks = append([]Streak{}, res.Streaks...)
+	if res.Costs != nil {
+		r.Cost = newReportCost(res.Costs, opts.Pricing)
+	}
 
 	if opts.NearMisses != 0 {
 		ns := append([]NearMiss{}, res.NearMisses...)
@@ -140,7 +148,7 @@ func (r *Report) WriteText(w io.Writer) error {
 	p.f("  Loops found          %d%s\n", r.TotalLoops, byDetector(r.LoopsByDetector))
 	p.f("  Wasted time          %s in loops\n", humanDuration(r.WastedSeconds))
 	p.f("  Wasted tool calls    %s\n", thousands(r.WastedToolCalls))
-	p.f("  Cost                 not computed yet (milestone M4)\n")
+	r.writeCost(p)
 	if r.Lines.Malformed > 0 || len(r.Errors) > 0 {
 		p.f("  Skipped              %d malformed lines, %d unreadable files\n", r.Lines.Malformed, len(r.Errors))
 	}
@@ -154,8 +162,12 @@ func (r *Report) WriteText(w io.Writer) error {
 				p.f("    │ %s\n", clipText(e, 160))
 			}
 			p.f("    LoopGuard would have: %s\n", wouldText(l.WouldHave))
+			if l.CostUSD != nil && r.Cost != nil {
+				p.f("    model calls in the loop: %s API-equivalent\n", r.Cost.pricing.Format(*l.CostUSD))
+			}
 		}
 	}
+	r.writeSessionCosts(p)
 	r.writeFailureShape(p)
 	if r.NearMisses != nil {
 		r.writeNearMisses(p)
@@ -346,4 +358,69 @@ func thousands(n int) string {
 		s = s[:i] + "," + s[i:]
 	}
 	return s
+}
+
+// ReportCost is the usage and API-equivalent cost of a replay.
+type ReportCost struct {
+	Basis          string        `json:"basis"` // "API-equivalent USD"
+	Tokens         int64         `json:"tokens"`
+	Usage          cost.Usage    `json:"usage"`
+	CostUSD        float64       `json:"cost_usd"`
+	UnpricedTokens int64         `json:"unpriced_tokens"`
+	UnknownModels  []string      `json:"unknown_models"`
+	WastedCostUSD  float64       `json:"wasted_cost_usd"` // model calls inside loops
+	Sessions       []SessionCost `json:"sessions"`        // most expensive first
+
+	pricing *cost.Pricing
+}
+
+// maxCostSessions caps the per-session cost list in the terminal report.
+const maxCostSessions = 5
+
+func newReportCost(c *Costs, p *cost.Pricing) *ReportCost {
+	return &ReportCost{Basis: CostBasis, Tokens: c.Usage.Total(), Usage: c.Usage, CostUSD: c.CostUSD,
+		UnpricedTokens: c.Unpriced.Total(), UnknownModels: c.UnknownModels, WastedCostUSD: c.WastedCostUSD,
+		Sessions: c.SessionCosts(), pricing: p}
+}
+
+func (r *Report) writeCost(p *printer) {
+	c := r.Cost
+	if c == nil {
+		return
+	}
+	p.f("  Cost                 %s API-equivalent, %s tokens\n", c.pricing.Format(c.CostUSD), thousands(int(c.Tokens)))
+	p.f("  Cost inside loops    %s\n", c.pricing.Format(c.WastedCostUSD))
+	if c.UnpricedTokens > 0 {
+		p.f("  Not priced           %s tokens of %s (cost unknown; add them to pricing.yaml)\n",
+			thousands(int(c.UnpricedTokens)), strings.Join(c.UnknownModels, ", "))
+	}
+}
+
+func (r *Report) writeSessionCosts(p *printer) {
+	c := r.Cost
+	if c == nil || len(c.Sessions) == 0 {
+		return
+	}
+	n := min(len(c.Sessions), maxCostSessions)
+	p.f("\nCost by session (top %d of %d, API-equivalent)\n", n, len(c.Sessions))
+	for _, s := range c.Sessions[:n] {
+		extra := ""
+		if s.WastedCostUSD > 0 {
+			extra = ", " + c.pricing.Format(s.WastedCostUSD) + " inside loops"
+		}
+		if s.UnpricedTokens > 0 {
+			extra += fmt.Sprintf(", %s tokens not priced", thousands(int(s.UnpricedTokens)))
+		}
+		p.f("  %-10s %12s  %14s tokens  %s%s\n", shortID(s.SessionID, ""), c.pricing.Format(s.CostUSD), thousands(int(s.Tokens)),
+			clipLeft(s.Project, 40), extra)
+	}
+}
+
+// clipLeft keeps the last n characters of s, with "…" in front if cut.
+func clipLeft(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return "…" + string(r[len(r)-n+1:])
 }

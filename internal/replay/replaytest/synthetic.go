@@ -3,6 +3,7 @@
 package replaytest
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -61,6 +62,10 @@ type Builder struct {
 	n       int
 	session string
 	agent   string
+	// Model is the model of the assistant messages ("claude-test", which has
+	// no price, if empty); CacheRead, if set, is each message's cache read.
+	Model     string
+	CacheRead int
 }
 
 // NewBuilder starts a transcript at T0.
@@ -123,9 +128,9 @@ func (b *Builder) Tool(name string, input map[string]any, result string, isError
 	id := fmt.Sprintf("toolu_%04d", b.n)
 	a := b.base("assistant")
 	a["message"] = map[string]any{
-		"id": fmt.Sprintf("msg_%04d", b.n), "role": "assistant", "model": "claude-test", "stop_reason": "tool_use",
+		"id": fmt.Sprintf("msg_%04d", b.n), "role": "assistant", "model": cmp.Or(b.Model, "claude-test"), "stop_reason": "tool_use",
 		"content": []any{map[string]any{"type": "tool_use", "id": id, "name": name, "input": input, "caller": map[string]string{"type": "direct"}}},
-		"usage":   map[string]int{"input_tokens": 3, "output_tokens": 50},
+		"usage":   map[string]int{"input_tokens": 3, "output_tokens": 50, "cache_read_input_tokens": b.CacheRead},
 	}
 	b.add(a)
 	b.Advance(2 * time.Second)

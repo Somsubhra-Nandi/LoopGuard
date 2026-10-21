@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
+	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
 	"github.com/Somsubhra-Nandi/loopguard/internal/event"
 	"github.com/Somsubhra-Nandi/loopguard/internal/pipeline"
 	"github.com/Somsubhra-Nandi/loopguard/internal/redact"
@@ -40,6 +41,10 @@ type Loop struct {
 	MaxSeverity     float64   `json:"max_severity"`
 	ErrorLines      []string  `json:"error_lines"`
 	WouldHave       []Would   `json:"would_have"`
+	// CostUSD is the API-equivalent cost of the model calls from the one
+	// that issued the loop's first call to the one that issued its last
+	// (with Options.Pricing; models without a price count 0).
+	CostUSD *float64 `json:"cost_usd,omitempty"`
 
 	seqs map[uint64]bool
 	gen  int
@@ -69,6 +74,7 @@ type Call struct {
 	Command string    `json:"command,omitempty"` // normalized and redacted
 	File    string    `json:"file,omitempty"`
 	Failed  bool      `json:"failed"`
+	Turn    int       `json:"turn"` // human turns since the stream's start (0: before the first prompt)
 }
 
 // Options configures a replay.
@@ -79,6 +85,37 @@ type Options struct {
 	Workers int
 	// Timeline, if set, collects every completed call of every stream.
 	Timeline bool
+	// Pricing, if set, accounts for usage and API-equivalent cost (M4):
+	// per stream, per loop, and in the time spent inside loops.
+	Pricing *cost.Pricing
+}
+
+// Costs is the usage and API-equivalent cost of a replay (with
+// Options.Pricing).
+type Costs struct {
+	Usage    cost.Usage `json:"usage"`
+	CostUSD  float64    `json:"cost_usd"`       // priced messages only
+	Unpriced cost.Usage `json:"unpriced_usage"` // models without a verified price
+	// UnknownModels are the models without a verified price.
+	UnknownModels []string `json:"unknown_models"`
+	// WastedCostUSD is the cost of the model calls inside loops (the union
+	// of the loops' spans, per stream).
+	WastedCostUSD float64 `json:"wasted_cost_usd"`
+	// Streams holds each stream's summary, by stream key.
+	Streams map[string]*StreamCost `json:"-"`
+}
+
+// StreamCost is one stream's usage summary, with the issuing message of
+// each call (by call number) for loop costs.
+type StreamCost struct {
+	Summary cost.Summary
+	// CallMessage[n] is the index of the message that issued call n (-1:
+	// unknown).
+	CallMessage []int
+	// WastedUSD is the cost of the model calls inside the stream's loops.
+	WastedUSD float64
+	// Project is the encoded project directory, for display.
+	Project string
 }
 
 // Result is the outcome of replaying a set of streams.
@@ -94,6 +131,7 @@ type Result struct {
 	WastedToolCalls   int     // union of loop call ranges per stream
 	Errors            []string
 	Timelines         map[string][]Call // by stream key, with Options.Timeline
+	Costs             *Costs            // with Options.Pricing
 
 	// Visibility for tuning (detection-free).
 	NearMisses   []NearMiss       // closest first
@@ -113,6 +151,8 @@ type streamResult struct {
 	timeline []Call
 	in       *insights
 	err      error
+	cost     *StreamCost
+	wasteUSD float64
 }
 
 // Run replays streams (in parallel across streams; each stream in order).
@@ -144,9 +184,27 @@ func Run(streams []Stream, opts Options) *Result {
 	if opts.Timeline {
 		res.Timelines = make(map[string][]Call)
 	}
+	if opts.Pricing != nil {
+		res.Costs = &Costs{UnknownModels: []string{}, Streams: map[string]*StreamCost{}}
+	}
+	unknown := map[string]bool{}
 	sessions := map[string]bool{}
 	withLoops := map[string]bool{}
 	for _, r := range results {
+		if c := res.Costs; c != nil && r.cost != nil {
+			sum := r.cost.Summary
+			c.Usage = c.Usage.Add(sum.Usage)
+			c.CostUSD += sum.CostUSD
+			c.Unpriced = c.Unpriced.Add(sum.Unpriced)
+			c.WastedCostUSD += r.wasteUSD
+			c.Streams[r.st.Key()] = r.cost
+			for _, m := range sum.Models {
+				if !m.Priced && m.Model != cost.SyntheticModel && !unknown[m.Model] {
+					unknown[m.Model] = true
+					c.UnknownModels = append(c.UnknownModels, m.Model)
+				}
+			}
+		}
 		sessions[r.st.SessionID] = true
 		res.Lines.add(r.stats)
 		res.ToolCalls += r.calls
@@ -167,6 +225,9 @@ func Run(streams []Stream, opts Options) *Result {
 	}
 	res.Sessions = len(sessions)
 	res.SessionsWithLoops = len(withLoops)
+	if res.Costs != nil {
+		sort.Strings(res.Costs.UnknownModels)
+	}
 	res.finishInsights()
 	return res
 }
@@ -232,13 +293,20 @@ func replayStream(p *pipeline.Pipeline, st Stream, opts Options) streamResult {
 	out.in = in
 	nudgeAt := opts.Thresholds.Policy.NudgeThreshold
 	var (
-		times  = []time.Time{{}} // by seq (seq 0 unused)
-		callOf = []int{0}        // call number by seq
-		done   = 0
-		gen    = 0
-		loops  = map[string]*Loop{}
-		order  []*Loop
+		times   = []time.Time{{}} // by seq (seq 0 unused)
+		callOf  = []int{0}        // call number by seq
+		done    = 0
+		gen     = 0
+		loops   = map[string]*Loop{}
+		order   []*Loop
+		sc      *cost.Scanner
+		callMsg = []int{-1} // issuing message by call number (call 0 unused)
+		lines   func([]byte)
 	)
+	if opts.Pricing != nil {
+		sc = cost.NewScanner()
+		lines = sc.Line
+	}
 	loopFor := func(key, detector string) *Loop {
 		k := fmt.Sprintf("%d\x00%s", gen, key)
 		l := loops[k]
@@ -265,16 +333,27 @@ func replayStream(p *pipeline.Pipeline, st Stream, opts Options) streamResult {
 			if r.Call != nil {
 				in.call(r.Call, done)
 			}
+			if sc != nil {
+				msg := -1
+				if r.Call != nil {
+					sc.Label(ev.ToolUseID, CostGroup(r.Call, ev.Cwd), done)
+					msg = sc.IssuingMessage(ev.ToolUseID)
+				}
+				callMsg = append(callMsg, msg)
+			}
 			if opts.Timeline && r.Call != nil {
 				out.timeline = append(out.timeline, Call{
 					N: done, At: ev.ReceivedAt, Tool: ev.ToolName, Family: r.Call.Family,
-					Command: clipText(r.Call.Command, 160), File: relPath(r.Call.FilePath, ev.Cwd), Failed: r.Call.Failed(),
+					Command: clipText(r.Call.Command, 160), File: relPath(r.Call.FilePath, ev.Cwd), Failed: r.Call.Failed(), Turn: gen,
 				})
 			}
 		case event.PhasePrompt:
 			gen++
 			callOf[ev.Seq] = done
 			in.prompt()
+			if sc != nil {
+				sc.MarkTurn()
+			}
 		}
 		for _, sig := range r.Signals {
 			l := loopFor(sig.LoopKey, sig.Detector)
@@ -303,7 +382,7 @@ func replayStream(p *pipeline.Pipeline, st Stream, opts Options) streamResult {
 			l.WouldHave = append(l.WouldHave, Would{Action: string(d.WouldHave), Call: callOf[d.Seq], Reason: d.Reason})
 		}
 	}
-	out.stats, out.err = ReadStream(f, st, emit)
+	out.stats, out.err = ReadStreamLines(f, st, emit, lines)
 	out.calls = done
 
 	var spans []span
@@ -323,7 +402,52 @@ func replayStream(p *pipeline.Pipeline, st Stream, opts Options) streamResult {
 	}
 	out.wasted, out.wastedN = union(spans)
 	in.finish(out.loops)
+	if sc != nil {
+		sum := sc.Summarize(opts.Pricing)
+		out.cost = &StreamCost{Summary: sum, CallMessage: callMsg, Project: st.Project}
+		// The model calls inside loops: from the one that issued a loop's
+		// first call to the one that issued its last; overlaps count once.
+		inLoop := map[int]bool{}
+		msgOf := func(n int) int {
+			if n > 0 && n < len(callMsg) {
+				return callMsg[n]
+			}
+			return -1
+		}
+		for _, l := range out.loops {
+			from, to := msgOf(l.FirstCall), msgOf(l.LastCall)
+			c := sum.CostBetween(from, to)
+			l.CostUSD = &c
+			for i := from; from >= 0 && i <= to; i++ {
+				inLoop[i] = true
+			}
+		}
+		for i := range inLoop {
+			if i < len(sum.MessageCost) {
+				out.wasteUSD += sum.MessageCost[i]
+			}
+		}
+		out.cost.WastedUSD = out.wasteUSD
+	}
 	return out
+}
+
+// CostGroup is how cost estimates group a call: a shell command by its
+// family ("bash: npm test"), a file tool by the file ("read src/a.go",
+// relative to the working directory, redacted), anything else by its tool.
+func CostGroup(c *event.ToolCall, cwd string) string {
+	tool := c.Event.ToolName
+	switch tool {
+	case event.ToolBash:
+		if c.Family != "" {
+			return "bash: " + c.Family
+		}
+	case event.ToolRead, event.ToolEdit, event.ToolWrite, event.ToolPatch:
+		if c.FilePath != "" {
+			return tool + " " + redact.String(relPath(c.FilePath, cwd))
+		}
+	}
+	return tool
 }
 
 type span struct {
