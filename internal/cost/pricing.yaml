@@ -1,0 +1,210 @@
+# LoopGuard model prices (LLD §8.2), in USD per million tokens.
+#
+# LoopGuard shows "API-equivalent" cost: token usage priced at the API
+# rates below. On a subscription plan you don't pay per token; the number
+# says what the same work would cost through the API.
+#
+# Edit freely: LoopGuard never overwrites this file. A model's entry is
+# used when `match` equals the model id (a trailing -YYYYMMDD date or
+# [suffix] is ignored), or matches it as a glob (`*`, `?`). The first
+# matching entry wins. A model with no entry, or an entry whose `checked`
+# is "unverified", has its tokens counted and its cost shown as unknown
+# (loopguard doctor lists them).
+#
+# cache_write_per_mtok is the 5-minute cache, cache_write_1h_per_mtok the
+# one-hour cache (Claude Code mostly writes the one-hour cache).
+# fast_multiplier applies to fast-mode messages (usage.speed "fast"),
+# us_multiplier to US-only inference (usage.inference_geo "us").
+# long_prompt: a message whose prompt (input + cache writes + cache
+# reads) is over above_tokens uses those prices instead.
+
+currency: USD
+# Optional display currency, shown next to USD. You set the rate (units of
+# the display currency per USD); LoopGuard never fetches it.
+currency_display: ""   # e.g. INR
+fx_rate: 0             # e.g. 84.0
+
+models:
+  - match: claude-fable-5-1
+    input_per_mtok: 10
+    output_per_mtok: 50
+    cache_write_per_mtok: 12.50
+    cache_write_1h_per_mtok: 20
+    cache_read_per_mtok: 0.25
+    us_multiplier: 1.1
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-mythos-5-1
+    input_per_mtok: 10
+    output_per_mtok: 50
+    cache_write_per_mtok: 12.50
+    cache_write_1h_per_mtok: 20
+    cache_read_per_mtok: 0.25
+    us_multiplier: 1.1
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-fable-5
+    input_per_mtok: 10
+    output_per_mtok: 50
+    cache_write_per_mtok: 12.50
+    cache_write_1h_per_mtok: 20
+    cache_read_per_mtok: 1
+    us_multiplier: 1.1
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-mythos-5
+    input_per_mtok: 10
+    output_per_mtok: 50
+    cache_write_per_mtok: 12.50
+    cache_write_1h_per_mtok: 20
+    cache_read_per_mtok: 1
+    us_multiplier: 1.1
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-opus-5-5
+    input_per_mtok: 4
+    output_per_mtok: 20
+    cache_write_per_mtok: 5
+    cache_write_1h_per_mtok: 8
+    cache_read_per_mtok: 0.20
+    fast_multiplier: 2     # fast mode: $8 input, $40 output
+    us_multiplier: 1.1
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-opus-5
+    input_per_mtok: 5
+    output_per_mtok: 25
+    cache_write_per_mtok: 6.25
+    cache_write_1h_per_mtok: 10
+    cache_read_per_mtok: 0.50
+    fast_multiplier: 2     # fast mode: $10 input, $50 output
+    us_multiplier: 1.1
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-opus-4-8
+    input_per_mtok: 5
+    output_per_mtok: 25
+    cache_write_per_mtok: 6.25
+    cache_write_1h_per_mtok: 10
+    cache_read_per_mtok: 0.50
+    fast_multiplier: 2
+    us_multiplier: 1.1
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-opus-4-7
+    input_per_mtok: 5
+    output_per_mtok: 25
+    cache_write_per_mtok: 6.25
+    cache_write_1h_per_mtok: 10
+    cache_read_per_mtok: 0.50
+    us_multiplier: 1.1
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-opus-4-6
+    input_per_mtok: 5
+    output_per_mtok: 25
+    cache_write_per_mtok: 6.25
+    cache_write_1h_per_mtok: 10
+    cache_read_per_mtok: 0.50
+    us_multiplier: 1.1
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-opus-4-5
+    input_per_mtok: 5
+    output_per_mtok: 25
+    cache_write_per_mtok: 6.25
+    cache_write_1h_per_mtok: 10
+    cache_read_per_mtok: 0.50
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-opus-4-1
+    input_per_mtok: 15
+    output_per_mtok: 75
+    cache_write_per_mtok: 18.75
+    cache_write_1h_per_mtok: 30
+    cache_read_per_mtok: 1.50
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-opus-4
+    input_per_mtok: 15
+    output_per_mtok: 75
+    cache_write_per_mtok: 18.75
+    cache_write_1h_per_mtok: 30
+    cache_read_per_mtok: 1.50
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-sonnet-5-5
+    input_per_mtok: 2
+    output_per_mtok: 10
+    cache_write_per_mtok: 2.50
+    cache_write_1h_per_mtok: 4
+    cache_read_per_mtok: 0.10
+    us_multiplier: 1.1
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-sonnet-5
+    input_per_mtok: 2
+    output_per_mtok: 10
+    cache_write_per_mtok: 2.50
+    cache_write_1h_per_mtok: 4
+    cache_read_per_mtok: 0.20
+    us_multiplier: 1.1
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-sonnet-4-6
+    input_per_mtok: 3
+    output_per_mtok: 15
+    cache_write_per_mtok: 3.75
+    cache_write_1h_per_mtok: 6
+    cache_read_per_mtok: 0.30
+    us_multiplier: 1.1
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-sonnet-4-5
+    input_per_mtok: 3
+    output_per_mtok: 15
+    cache_write_per_mtok: 3.75
+    cache_write_1h_per_mtok: 6
+    cache_read_per_mtok: 0.30
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-sonnet-4
+    input_per_mtok: 3
+    output_per_mtok: 15
+    cache_write_per_mtok: 3.75
+    cache_write_1h_per_mtok: 6
+    cache_read_per_mtok: 0.30
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-haiku-5-5
+    input_per_mtok: 0.10
+    output_per_mtok: 0.50
+    cache_write_per_mtok: 0.125
+    cache_write_1h_per_mtok: 0.20
+    cache_read_per_mtok: 0.01
+    us_multiplier: 1.1
+    long_prompt:           # prompts over 100,000 tokens
+      above_tokens: 100000
+      input_per_mtok: 0.50
+      output_per_mtok: 2.50
+      cache_write_per_mtok: 0.625
+      cache_write_1h_per_mtok: 1
+      cache_read_per_mtok: 0.05
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-haiku-4-5
+    input_per_mtok: 1
+    output_per_mtok: 5
+    cache_write_per_mtok: 1.25
+    cache_write_1h_per_mtok: 2
+    cache_read_per_mtok: 0.10
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
+  - match: claude-3-5-haiku
+    input_per_mtok: 0.80
+    output_per_mtok: 4
+    cache_write_per_mtok: 1
+    cache_write_1h_per_mtok: 1.60
+    cache_read_per_mtok: 0.08
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-10-21"
