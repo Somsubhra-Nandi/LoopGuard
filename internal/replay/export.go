@@ -2,6 +2,7 @@ package replay
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
+	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
 	"github.com/Somsubhra-Nandi/loopguard/internal/event"
 	"github.com/Somsubhra-Nandi/loopguard/internal/normalize"
 	"github.com/Somsubhra-Nandi/loopguard/internal/redact"
@@ -85,6 +87,12 @@ type exporter struct {
 	words   map[string]string // names learned from paths (username, repo) → replacement
 	stats   ExportStats
 	err     error
+
+	// usage is the API message of the line being read, if it is one with
+	// a tool call: its pre events carry it. chars holds each tool result's
+	// original length, by tool use id.
+	usage *cost.Message
+	chars map[string]int64
 }
 
 // Export reads one stream and writes its anonymized copy to w.
@@ -101,11 +109,12 @@ func Export(st Stream, w io.Writer, th config.Thresholds) (ExportStats, error) {
 		paths:   map[string]string{},
 		cwds:    map[string]bool{},
 		words:   map[string]string{},
+		chars:   map[string]int64{},
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		x.learn(home)
 	}
-	if _, err := ReadStream(f, st, x.event); err != nil {
+	if _, err := ReadStreamLines(f, st, x.event, x.line); err != nil {
 		return x.stats, err
 	}
 	if x.err != nil {
@@ -142,9 +151,13 @@ func (x *exporter) event(ev *event.Event, _ uint64) {
 	case event.PhasePre:
 		x.stats.ToolCalls++
 		base["type"] = "assistant"
-		base["message"] = map[string]any{"role": "assistant", "content": []any{map[string]any{
+		msg := map[string]any{"role": "assistant", "content": []any{map[string]any{
 			"type": "tool_use", "id": anonID(ev.ToolUseID), "name": originalToolName(ev.ToolName), "input": x.input(ev),
 		}}}
+		if x.usage != nil {
+			addUsage(msg, *x.usage)
+		}
+		base["message"] = msg
 	case event.PhasePost, event.PhasePostFailure:
 		c := x.b.Build(ev)
 		content := "out_" + strconv.FormatUint(c.ResultFP, 16)
@@ -156,9 +169,14 @@ func (x *exporter) event(ev *event.Event, _ uint64) {
 			content = strings.Join(append(lines, content), "\n")
 		}
 		base["type"] = "user"
-		base["message"] = map[string]any{"role": "user", "content": []any{map[string]any{
+		result := map[string]any{
 			"type": "tool_result", "tool_use_id": anonID(ev.ToolUseID), "content": content, "is_error": c.Failed(),
-		}}}
+		}
+		if n, ok := x.chars[ev.ToolUseID]; ok {
+			result["chars"] = n // the original length, for cost estimates
+			delete(x.chars, ev.ToolUseID)
+		}
+		base["message"] = map[string]any{"role": "user", "content": []any{result}}
 	default:
 		return
 	}
@@ -377,4 +395,100 @@ func firstNonEmpty(ss ...string) string {
 		}
 	}
 	return ""
+}
+
+// line sees each raw line before its events: it keeps an API message's
+// usage for the line's tool calls, writes the usage of messages without
+// one (usage counts are not private), notes each tool result's original
+// length, and keeps compaction boundaries, so cost accounting (M4) works
+// on exports. Message ids become hash tokens.
+func (x *exporter) line(b []byte) {
+	x.usage = nil
+	if x.err != nil {
+		return
+	}
+	if m, ok := cost.ParseLine(b); ok {
+		if bytes.Contains(b, []byte(`"tool_use"`)) {
+			x.usage = &m
+			return
+		}
+		msg := map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": "<text>"}}}
+		addUsage(msg, m)
+		x.write(map[string]any{"type": "assistant", "message": msg}, m.TS)
+		return
+	}
+	var l struct {
+		Type    string `json:"type"`
+		Subtype string `json:"subtype"`
+		TS      string `json:"timestamp"`
+		Message *struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+	switch {
+	case bytes.Contains(b, []byte(`"tool_result"`)):
+		if json.Unmarshal(b, &l) != nil || l.Message == nil {
+			return
+		}
+		var blocks []struct {
+			Type      string          `json:"type"`
+			ToolUseID string          `json:"tool_use_id"`
+			Content   json.RawMessage `json:"content"`
+		}
+		if json.Unmarshal(l.Message.Content, &blocks) != nil {
+			return
+		}
+		for _, bl := range blocks {
+			if bl.Type == "tool_result" {
+				x.chars[bl.ToolUseID] = cost.ResultChars(bl.Content)
+			}
+		}
+	case bytes.Contains(b, []byte(`compact_boundary`)):
+		if json.Unmarshal(b, &l) == nil && l.Type == "system" && l.Subtype == "compact_boundary" {
+			ts, _ := time.Parse(time.RFC3339Nano, l.TS)
+			x.write(map[string]any{"type": "system", "subtype": "compact_boundary"}, ts)
+		}
+	}
+}
+
+// write writes a line of the export's own (usage, compaction), at the
+// shifted time of ts.
+func (x *exporter) write(line map[string]any, ts time.Time) {
+	if x.t0.IsZero() {
+		x.t0 = ts
+	}
+	if ts.Before(x.t0) {
+		ts = x.t0
+	}
+	line["sessionId"] = x.session
+	line["timestamp"] = epoch.Add(ts.Sub(x.t0)).Format("2006-01-02T15:04:05.000Z")
+	line["cwd"] = anonCwd
+	line["isSidechain"] = false
+	b, err := json.Marshal(line)
+	if err != nil {
+		x.err = err
+		return
+	}
+	x.stats.Lines++
+	_, x.err = x.w.Write(append(b, '\n'))
+}
+
+// addUsage puts a message's id (as a hash token), model, and usage on an
+// exported message.
+func addUsage(msg map[string]any, m cost.Message) {
+	msg["id"] = "msg_" + strconv.FormatUint(normalize.HashString(m.ID), 16)
+	msg["model"] = m.Model
+	u := map[string]any{
+		"input_tokens": m.Usage.Input, "output_tokens": m.Usage.Output,
+		"cache_creation_input_tokens": m.Usage.CacheWrite, "cache_read_input_tokens": m.Usage.CacheRead,
+		"cache_creation": map[string]int64{"ephemeral_1h_input_tokens": m.Usage.CacheWrite1h,
+			"ephemeral_5m_input_tokens": m.Usage.CacheWrite - m.Usage.CacheWrite1h},
+	}
+	if m.Speed != "" {
+		u["speed"] = m.Speed
+	}
+	if m.Geo != "" {
+		u["inference_geo"] = m.Geo
+	}
+	msg["usage"] = u
 }

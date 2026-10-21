@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
+	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
 )
 
 var update = flag.Bool("update", false, "rewrite testdata/transcripts/golden.json")
@@ -20,12 +21,18 @@ var update = flag.Bool("update", false, "rewrite testdata/transcripts/golden.jso
 type golden struct {
 	Report  *Report        `json:"report"`
 	Streams []goldenStream `json:"streams"`
+	// The estimated cost of tool calls (M4): top 10 groups, 5 largest results.
+	Estimates []GroupEstimate  `json:"estimates"`
+	Largest   []OutputEstimate `json:"largest_outputs"`
 }
 
 type goldenStream struct {
-	Stream    string `json:"stream"`
-	ToolCalls int    `json:"tool_calls"`
-	Failed    int    `json:"failed_calls"`
+	Stream    string  `json:"stream"`
+	ToolCalls int     `json:"tool_calls"`
+	Failed    int     `json:"failed_calls"`
+	Messages  int     `json:"messages"`
+	Tokens    int64   `json:"tokens"`
+	CostUSD   float64 `json:"cost_usd"`
 }
 
 // TestGolden replays the anonymized real sessions in testdata/transcripts
@@ -41,10 +48,12 @@ func TestGolden(t *testing.T) {
 	if len(streams) == 0 {
 		t.Fatal("no transcripts under testdata/transcripts")
 	}
-	res := Run(streams, Options{Thresholds: config.Default(), Timeline: true})
+	res := Run(streams, Options{Thresholds: config.Default(), Timeline: true, Pricing: cost.DefaultPricing()})
 	g := golden{Report: NewReport(res, "testdata/transcripts", time.Time{}, ReportOptions{Top: -1}, time.Unix(0, 0), 0)}
+	g.Estimates, g.Largest = res.Costs.Estimates(10, nil)
 	for key, calls := range res.Timelines {
-		gs := goldenStream{Stream: key, ToolCalls: len(calls)}
+		sum := res.Costs.Streams[key].Summary
+		gs := goldenStream{Stream: key, ToolCalls: len(calls), Tokens: sum.Usage.Total(), CostUSD: sum.CostUSD, Messages: sum.Messages}
 		for _, c := range calls {
 			if c.Failed {
 				gs.Failed++

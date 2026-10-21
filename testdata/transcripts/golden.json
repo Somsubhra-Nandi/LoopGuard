@@ -13,10 +13,75 @@
     "below_threshold_signals": 0,
     "wasted_seconds": 0,
     "wasted_tool_calls": 0,
+    "cost": {
+      "basis": "API-equivalent USD",
+      "tokens": 232014263,
+      "usage": {
+        "input_tokens": 1374,
+        "output_tokens": 615714,
+        "cache_write_tokens": 1366866,
+        "cache_read_tokens": 230030309,
+        "cache_write_1h_tokens": 1366866
+      },
+      "cost_usd": 69.2607658,
+      "unpriced_tokens": 0,
+      "unknown_models": [],
+      "wasted_cost_usd": 0,
+      "sessions": [
+        {
+          "session_id": "anon-fd1e580b",
+          "project": "anonymized",
+          "streams": 1,
+          "tokens": 150846669,
+          "usage": {
+            "input_tokens": 752,
+            "output_tokens": 336678,
+            "cache_write_tokens": 655616,
+            "cache_read_tokens": 149853623,
+            "cache_write_1h_tokens": 655616
+          },
+          "cost_usd": 41.952220600000004,
+          "unpriced_tokens": 0,
+          "wasted_cost_usd": 0
+        },
+        {
+          "session_id": "anon-98cddc20",
+          "project": "anonymized",
+          "streams": 1,
+          "tokens": 53442944,
+          "usage": {
+            "input_tokens": 370,
+            "output_tokens": 166544,
+            "cache_write_tokens": 443990,
+            "cache_read_tokens": 52832040,
+            "cache_write_1h_tokens": 443990
+          },
+          "cost_usd": 17.450688000000007,
+          "unpriced_tokens": 0,
+          "wasted_cost_usd": 0
+        },
+        {
+          "session_id": "anon-4ad678ac",
+          "project": "anonymized",
+          "streams": 1,
+          "tokens": 27724650,
+          "usage": {
+            "input_tokens": 252,
+            "output_tokens": 112492,
+            "cache_write_tokens": 267260,
+            "cache_read_tokens": 27344646,
+            "cache_write_1h_tokens": 267260
+          },
+          "cost_usd": 9.857857199999998,
+          "unpriced_tokens": 0,
+          "wasted_cost_usd": 0
+        }
+      ]
+    },
     "lines": {
-      "lines": 1765,
+      "lines": 1806,
       "malformed": 0,
-      "ignored": 0,
+      "ignored": 41,
       "tool_uses": 871,
       "tool_results": 871,
       "unjoined_results": 0,
@@ -128,17 +193,145 @@
     {
       "stream": "anon-4ad678ac",
       "tool_calls": 137,
-      "failed_calls": 12
+      "failed_calls": 12,
+      "messages": 125,
+      "tokens": 27724650,
+      "cost_usd": 9.857857199999998
     },
     {
       "stream": "anon-98cddc20",
       "tool_calls": 260,
-      "failed_calls": 10
+      "failed_calls": 10,
+      "messages": 186,
+      "tokens": 53442944,
+      "cost_usd": 17.450688000000007
     },
     {
       "stream": "anon-fd1e580b",
       "tool_calls": 474,
-      "failed_calls": 31
+      "failed_calls": 31,
+      "messages": 376,
+      "tokens": 150846669,
+      "cost_usd": 41.952220600000004
+    }
+  ],
+  "estimates": [
+    {
+      "group": "bash: grep",
+      "runs": 111,
+      "avg_result_tokens": 419.77477477477476,
+      "est_usd": 3.2222397333333337,
+      "est_share": 0.04652330502146041
+    },
+    {
+      "group": "bash: python",
+      "runs": 83,
+      "avg_result_tokens": 194.9277108433735,
+      "est_usd": 2.002390800000001,
+      "est_share": 0.028910896044409617
+    },
+    {
+      "group": "bash: cat",
+      "runs": 20,
+      "avg_result_tokens": 1526.2,
+      "est_usd": 1.622599000000002,
+      "est_share": 0.023427390402893898
+    },
+    {
+      "group": "bash: sed",
+      "runs": 36,
+      "avg_result_tokens": 772.5277777777778,
+      "est_usd": 1.1780566,
+      "est_share": 0.017009003385867846
+    },
+    {
+      "group": "other:WebFetch",
+      "runs": 43,
+      "avg_result_tokens": 550.3255813953489,
+      "est_usd": 0.9089982000000019,
+      "est_share": 0.013124287459149085
+    },
+    {
+      "group": "edit src/file_6.sh",
+      "runs": 14,
+      "avg_result_tokens": 45,
+      "est_usd": 0.6290180000000002,
+      "est_share": 0.00908188052405277
+    },
+    {
+      "group": "read src/file_3.py",
+      "runs": 1,
+      "avg_result_tokens": 7179,
+      "est_usd": 0.5035984000000001,
+      "est_share": 0.007271048683669046
+    },
+    {
+      "group": "bash: node",
+      "runs": 23,
+      "avg_result_tokens": 282.2173913043478,
+      "est_usd": 0.5014144000000001,
+      "est_share": 0.0072395156797414465
+    },
+    {
+      "group": "bash: ls",
+      "runs": 21,
+      "avg_result_tokens": 492.5238095238095,
+      "est_usd": 0.43145980000000034,
+      "est_share": 0.006229497970696714
+    },
+    {
+      "group": "bash: curl",
+      "runs": 12,
+      "avg_result_tokens": 530.3333333333334,
+      "est_usd": 0.40780220000000034,
+      "est_share": 0.0058879250798003786
+    }
+  ],
+  "largest_outputs": [
+    {
+      "session_id": "anon-fd1e580b",
+      "group": "bash: cat",
+      "call": 3,
+      "result_tokens": 7271,
+      "later_calls": 374,
+      "est_usd": 0.547460800000001,
+      "est_share": 0.007904342287823808
+    },
+    {
+      "session_id": "anon-fd1e580b",
+      "group": "read src/file_3.py",
+      "call": 31,
+      "result_tokens": 7179,
+      "later_calls": 348,
+      "est_usd": 0.5035984000000001,
+      "est_share": 0.007271048683669046
+    },
+    {
+      "session_id": "anon-fd1e580b",
+      "group": "read src/file_4.py",
+      "call": 32,
+      "result_tokens": 4237,
+      "later_calls": 347,
+      "est_usd": 0.3745278,
+      "est_share": 0.005407503016664595
+    },
+    {
+      "session_id": "anon-fd1e580b",
+      "group": "read src/file_2.py",
+      "call": 30,
+      "result_tokens": 5288,
+      "later_calls": 349,
+      "est_usd": 0.3738024000000001,
+      "est_share": 0.005397029554645786
+    },
+    {
+      "session_id": "anon-4ad678ac",
+      "group": "edit src/file_6.sh",
+      "call": 43,
+      "result_tokens": 45,
+      "later_calls": 90,
+      "est_usd": 0.33143,
+      "est_share": 0.0047852488515222275
     }
   ]
 }
