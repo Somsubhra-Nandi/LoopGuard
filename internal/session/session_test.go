@@ -234,3 +234,39 @@ func TestResumeAt(t *testing.T) {
 		t.Errorf("seq after ResumeAt(10) = %d, want 43", ev.Seq)
 	}
 }
+
+func TestExplore(t *testing.T) {
+	s := New("cc:x", event.AgentClaudeCode, config.Default())
+	b := normalize.BuilderFor(config.Default())
+	explore := func(tool, input string, failed bool) bool {
+		ev := &event.Event{Phase: event.PhasePost, ToolName: tool, Input: []byte(input), Output: []byte(`"ok"`), IsError: failed, Cwd: "/r"}
+		s.Assign(ev)
+		c := b.Build(ev)
+		s.Record(c)
+		return c.Explore
+	}
+	for i, tt := range []struct {
+		tool, input string
+		failed      bool
+		want        bool
+	}{
+		{event.ToolRead, `{"file_path":"/r/a.go"}`, false, true},
+		{event.ToolRead, `{"file_path":"a.go","offset":10}`, false, false}, // the same file again
+		{event.ToolRead, `{"file_path":"/r/b.go"}`, true, false},           // a failed read saw nothing
+		{event.ToolRead, `{"file_path":"/r/b.go"}`, false, true},
+		{event.ToolGrep, `{"pattern":"Tax","path":"src"}`, false, true},
+		{event.ToolGrep, `{"pattern":"Tax","path":"src"}`, false, false},
+		{event.ToolGrep, `{"pattern":"Rate","path":"src"}`, false, true},
+		{"other:WebFetch", `{"url":"https://x.dev/a","prompt":"p1"}`, false, true},
+		{"other:WebFetch", `{"url":"https://x.dev/a","prompt":"p2"}`, false, false}, // the same URL
+		{"other:WebSearch", `{"query":"go toast"}`, false, true},
+		{event.ToolBash, `{"command":"cat README.md"}`, false, true},
+		{event.ToolBash, `{"command":"cat README.md"}`, false, false},
+		{event.ToolBash, `{"command":"npm test"}`, false, false}, // not read-only
+		{event.ToolEdit, `{"file_path":"/r/c.go","old_string":"a","new_string":"b"}`, false, false},
+	} {
+		if got := explore(tt.tool, tt.input, tt.failed); got != tt.want {
+			t.Errorf("%d: %s %s: explore %v, want %v", i, tt.tool, tt.input, got, tt.want)
+		}
+	}
+}

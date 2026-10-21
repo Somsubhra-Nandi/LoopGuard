@@ -60,6 +60,7 @@ func (b *Builder) Build(ev *event.Event) *event.ToolCall {
 		c.Identity = Identity(cmd.PrimaryWords(), c.Family, ev.Cwd)
 		c.Polling = b.Poll.Matches(*cmd)
 		readOnly = b.ReadOnly.Matches(*cmd)
+		c.ReadOnly = readOnly
 	}
 	switch ev.ToolName {
 	case event.ToolEdit:

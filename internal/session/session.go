@@ -1,7 +1,9 @@
 package session
 
 import (
+	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,9 +47,10 @@ type SessionState struct {
 	// Subagent is true for a subagent's stream. Its loops are nudged and
 	// denied inside the stream but never halt the parent's turn.
 	Subagent bool
-	// HaltNote is set when a halt was returned to the agent (enforce mode);
-	// the next human prompt then gets a note that the stop is over.
-	HaltNote bool
+	// HaltNote is set when a halt was returned to the agent, DenyNote when
+	// a deny was; the next human prompt then gets a note that the stop (or
+	// the blocks) applied only to the previous turn.
+	HaltNote, DenyNote bool
 	// PermissionWait sums, over calls in permission mode "default", the
 	// time between the pre event and the post that the tool itself didn't
 	// run (its reported duration_ms): mostly the human deciding on the
@@ -68,6 +71,7 @@ type SessionState struct {
 	seq       uint64
 	todosDone int
 	maxDist   int
+	seen      map[string]struct{} // what the session has looked at (explore)
 }
 
 // FileHistory is the write/edit/read history of one file.
@@ -224,8 +228,8 @@ func (s *SessionState) HumanPrompt(ev *event.Event) {
 // NewTurn starts a new turn at the current seq, as a human prompt does.
 // The daemon also calls it on a subagent's stream when the parent session
 // gets a human prompt.
-// HaltNote survives it: the turn's first decision reports that the stop
-// is over.
+// HaltNote and DenyNote survive it: the turn's first decision reports
+// that the stop is over.
 func (s *SessionState) NewTurn() {
 	s.TurnSeq = s.seq
 	s.Loops = make(map[string]*LoopState)
@@ -300,6 +304,7 @@ func (s *SessionState) Family(name string) *FamilyStats {
 // already be assigned.
 func (s *SessionState) Record(c *event.ToolCall) {
 	c.Progress, c.FamilyProgress = s.score(c)
+	c.Explore = s.explore(c)
 	s.Progress.Record(c.Seq(), c.Progress, c.Family, c.FamilyProgress)
 	s.Calls.Push(c)
 	s.CallCount++
@@ -368,6 +373,46 @@ func (s *SessionState) Record(c *event.ToolCall) {
 	if c.TodosDone >= 0 && isTodoList(c) {
 		s.todosDone = c.TodosDone
 	}
+}
+
+// maxSeen bounds the explore set; past it, the set starts over.
+const maxSeen = 4096
+
+// explore reports whether c looked at something the session hadn't (LLD
+// §6 D5): a successful read of a file not read before, a fetch of a URL
+// not fetched before, a web search with a new query, or a search or
+// read-only command not run before (same pattern and path, same command).
+// Repeats don't count. It records what c looked at.
+func (s *SessionState) explore(c *event.ToolCall) bool {
+	if c.Failed() {
+		return false
+	}
+	var key string
+	switch name := c.Event.ToolName; {
+	case name == event.ToolRead && c.FilePath != "":
+		key = "file\x00" + c.FilePath
+	case name == event.ToolGrep || name == event.ToolGlob || (name == event.ToolBash && c.ReadOnly && !c.Polling):
+		key = "action\x00" + strconv.FormatUint(c.ActionFP, 16)
+	case name == "other:WebFetch" || name == "other:WebSearch":
+		var in struct {
+			URL   string `json:"url"`
+			Query string `json:"query"`
+		}
+		if json.Unmarshal(c.Event.Input, &in) != nil || in.URL+in.Query == "" {
+			return false
+		}
+		key = name + "\x00" + in.URL + "\x00" + in.Query
+	default:
+		return false
+	}
+	if _, ok := s.seen[key]; ok {
+		return false
+	}
+	if s.seen == nil || len(s.seen) >= maxSeen {
+		s.seen = make(map[string]struct{})
+	}
+	s.seen[key] = struct{}{}
+	return true
 }
 
 // maxRunTimes is how many run times are kept per command identity.

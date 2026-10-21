@@ -69,8 +69,11 @@ type Event struct {
 	// (PostToolUse duration_ms); 0 if unknown. Unlike the time from the pre
 	// event to the post, it excludes waiting for a permission decision.
 	RunTime time.Duration
-	Seq     uint64          // assigned by the session
-	Raw     json.RawMessage // full payload, kept in memory only
+	// Interactive is set by the daemon from the hook's environment: the
+	// agent runs in a terminal a human is attending (LLD §15).
+	Interactive bool
+	Seq         uint64          // assigned by the session
+	Raw         json.RawMessage // full payload, kept in memory only
 }
 
 // EditPair holds the hashes of an edit's old and new strings, so inverse
@@ -99,7 +102,14 @@ type ToolCall struct {
 	FailingTests  int             // failing-test count parsed from the output, -1 if none found
 	TodosDone     int             // completed todo items in a todo/task update, -1 if not a todo call
 	Duration      time.Duration
-	Progress      float64 // progress score assigned by the session (LLD §5.1)
+	// ReadOnly (bash only): the primary command only reads or searches
+	// (read_only_commands).
+	ReadOnly bool
+	// Explore is set by the session: the call looked at something new in
+	// the session (a file read, a URL fetched, a search or read-only command
+	// not run before). The stall detector counts it as progress (LLD §6 D5).
+	Explore  bool
+	Progress float64 // progress score assigned by the session (LLD §5.1)
 	// FamilyProgress is the part of Progress that is about this call's own
 	// family: it recovered, its error changed to a never-seen one, or fewer
 	// of its tests fail. Only this resets or suppresses repeated failures.
@@ -137,6 +147,9 @@ const (
 	// DetectorSelfProtection is not a loop detector: it marks the denies of
 	// agent actions that would turn LoopGuard off (internal/guard).
 	DetectorSelfProtection = "self_protection"
+	// DetectorUserStop is not a loop detector either: it marks the halt
+	// the user asked for with `loopguard stop`.
+	DetectorUserStop = "user_stop"
 )
 
 // Signal is a detector's claim that a loop is happening.
@@ -160,6 +173,9 @@ type Evidence struct {
 	Files      []string      // files edited between attempts (D2)
 	Seqs       []uint64      // the calls that make up the loop, oldest first
 	Elapsed    time.Duration // from the first call of the loop to the current one
+	// Failures and Repeats count, for a stall (D5), the failed calls and
+	// the repeated reads and searches among its calls.
+	Failures, Repeats int
 	// Anchor is the error signature that identifies a repeated-failure loop
 	// (D2): the policy keeps it with the loop, and later failures that match
 	// it stay in the same loop, whatever the detector window holds.
@@ -177,16 +193,31 @@ const (
 	ActionHalt  Action = "halt"
 )
 
+// Rank orders actions by escalation: none (and "") 0, nudge 1, deny 2,
+// halt 3.
+func (a Action) Rank() int {
+	switch a {
+	case ActionNudge:
+		return 1
+	case ActionDeny:
+		return 2
+	case ActionHalt:
+		return 3
+	}
+	return 0
+}
+
 // Decision is the policy's output for one event.
 //
-// In observe mode Action is always ActionNone and WouldHave records what
-// enforce mode would have done, with Reason explaining why.
+// WouldHave records what the guard level does, with Reason explaining
+// why; Action is that action when the session's level allows it (assist:
+// nudges only; observe and notify: nothing), else ActionNone.
 type Decision struct {
 	Action    Action
 	LoopKey   string
 	Message   string // text for the agent (nudge/deny) or the human (halt stopReason)
 	Notify    bool
-	WouldHave Action  // the action enforce mode would have taken
+	WouldHave Action  // the action the guard level takes
 	Reason    string  // why, in one line
 	Detector  string  // detector behind the loop
 	Severity  float64 // severity of the signal that triggered the decision
