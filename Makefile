@@ -2,6 +2,7 @@
 
 GO          ?= go
 STATICCHECK ?= honnef.co/go/tools/cmd/staticcheck@v0.8.2
+GOVULNCHECK ?= golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -23,7 +24,7 @@ ifeq ($(RACE),1)
 RACEFLAG := -race
 endif
 
-.PHONY: all build test check-testdata lint vet staticcheck fmt fmt-check tidy clean eval
+.PHONY: all build test check-testdata lint vet staticcheck vulncheck fmt fmt-check tidy clean eval
 
 all: fmt-check lint test build
 
@@ -57,6 +58,11 @@ vet:
 
 staticcheck:
 	$(GO) run $(STATICCHECK) ./...
+
+# Known vulnerabilities in the code paths LoopGuard actually calls (Go
+# standard library and dependencies), from the Go vulnerability database.
+vulncheck:
+	$(GO) run $(GOVULNCHECK) ./...
 
 fmt:
 	gofmt -s -w .

@@ -40,6 +40,9 @@ jobs:
       - name: staticcheck
         run: make staticcheck
 
+      - name: govulncheck
+        run: make vulncheck
+
       - name: committed hook payloads are structure-only
         run: make check-testdata
 
