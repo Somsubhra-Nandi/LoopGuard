@@ -102,3 +102,16 @@ func (p *Pipeline) post(s *session.SessionState, ev *event.Event, fileHashAfter 
 func (p *Pipeline) Stop(s *session.SessionState, first bool) event.Decision {
 	return p.policy.Stop(s, s.Seq(), first)
 }
+
+// BudgetNudge and BudgetHalt return the decisions for a budget signal
+// (D6) on the session's latest event (see policy.Engine.BudgetNudge and
+// BudgetHalt).
+func (p *Pipeline) BudgetNudge(s *session.SessionState, sig event.Signal, seq uint64) event.Decision {
+	return p.policy.BudgetNudge(s, sig, seq)
+}
+
+// BudgetHalt returns the halt for a hard budget signal; record is false
+// for a halt already recorded in this turn.
+func (p *Pipeline) BudgetHalt(s *session.SessionState, sig event.Signal, seq uint64, record bool) event.Decision {
+	return p.policy.BudgetHalt(s, sig, seq, record)
+}

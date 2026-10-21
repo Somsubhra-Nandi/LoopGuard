@@ -80,7 +80,7 @@ func (o *Outcomes) Add(s *session.SessionState, ds []event.Decision) []Resolved 
 		if d.WouldHave == "" || d.WouldHave == event.ActionNone {
 			continue
 		}
-		if d.Detector == event.DetectorSelfProtection || d.Detector == event.DetectorUserStop {
+		if d.Detector == event.DetectorSelfProtection || d.Detector == event.DetectorUserStop || d.Detector == event.DetectorBudget {
 			out = append(out, Resolved{d, OutcomeNA})
 			continue
 		}
