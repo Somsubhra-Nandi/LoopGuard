@@ -14,7 +14,7 @@ const (
 	OutcomeHalted    = "halted"
 	OutcomeUnknown   = "unknown"
 	// OutcomeNA is for interventions that aren't about a loop (self-
-	// protection): there is nothing to recover from.
+	// protection, the user's stop): there is nothing to recover from.
 	OutcomeNA = "n/a"
 )
 
@@ -80,7 +80,7 @@ func (o *Outcomes) Add(s *session.SessionState, ds []event.Decision) []Resolved 
 		if d.WouldHave == "" || d.WouldHave == event.ActionNone {
 			continue
 		}
-		if d.Detector == event.DetectorSelfProtection {
+		if d.Detector == event.DetectorSelfProtection || d.Detector == event.DetectorUserStop {
 			out = append(out, Resolved{d, OutcomeNA})
 			continue
 		}

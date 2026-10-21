@@ -106,6 +106,7 @@ type runResult struct {
 	keys      []string // LoopKey of each signal, in the same order
 	decisions []string // "<call>:<action>"
 	details   []string // for failure messages
+	messages  []string // decision messages, in order
 }
 
 // runScenario feeds a scenario through a pipeline built from th.
@@ -140,6 +141,7 @@ func runScenario(t testing.TB, sc scenario, th config.Thresholds) runResult {
 				t.Fatalf("call %d: observe mode returned action %q", call, d.Action)
 			}
 			res.decisions = append(res.decisions, fmt.Sprintf("%d:%s", call, d.WouldHave))
+			res.messages = append(res.messages, d.Message)
 			res.details = append(res.details, fmt.Sprintf("call %d: would %s (%s)", call, d.WouldHave, d.Reason))
 		}
 	}

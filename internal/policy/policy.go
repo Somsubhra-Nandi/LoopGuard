@@ -12,8 +12,9 @@ import (
 )
 
 // Capabilities says how far a detector's loops may escalate (LLD §7.1).
+// Once: at most one nudge per loop (D5's loop is the turn).
 type Capabilities struct {
-	Nudge, Deny, Halt bool
+	Nudge, Deny, Halt, Once bool
 }
 
 // capabilities per detector. D4 nudges only, D5 nudges (and notifies), D6
@@ -23,7 +24,7 @@ var capabilities = map[string]Capabilities{
 	event.DetectorRepeatedFailure: {Nudge: true, Deny: true, Halt: true},
 	event.DetectorOscillation:     {Nudge: true, Deny: true, Halt: true},
 	event.DetectorReadThrash:      {Nudge: true},
-	event.DetectorStall:           {Nudge: true},
+	event.DetectorStall:           {Nudge: true, Once: true},
 	event.DetectorBudget:          {Halt: true},
 }
 
@@ -33,10 +34,10 @@ const permModeManual = "default"
 
 // Engine is the escalation state machine (LLD §7.1).
 //
-// Every Decision records in WouldHave what enforce mode does, with a
-// message from the §7.3 templates. Action is that same action only when
-// the session's Enforce flag is set (its effective mode is enforce);
-// otherwise it is ActionNone (observe mode, replay).
+// Every Decision records in WouldHave what the guard level does, with a
+// message from the §7.3 templates. Action is that same action when the
+// session's level allows it (SessionState.Allow: guard everything, assist
+// nudges only), otherwise ActionNone (observe and notify levels, replay).
 //
 // A subagent's stream (SessionState.Subagent) is nudged and denied but
 // never halted: a halt ends the whole turn, including the parent's.
@@ -53,22 +54,61 @@ func New(th config.Thresholds) *Engine {
 }
 
 // HaltOverNote is the context given with the first human prompt after a
-// halt, so the agent doesn't take the earlier stop for a standing order.
-const HaltOverNote = "LoopGuard's earlier stop applied only to the previous turn; commands are not blocked now."
+// halt, so the agent doesn't take the earlier stop for a standing order;
+// BlocksOverNote is the same after a turn that had denies but no halt.
+const (
+	HaltOverNote   = "LoopGuard's earlier stop applied only to the previous turn; commands are not blocked now."
+	BlocksOverNote = "LoopGuard's earlier blocks applied only to the previous turn; commands are not blocked now."
+)
 
-// Prompt is called after a human prompt has reset the loops. After a halt
-// that reached the agent, it returns the note that the stop is over (an
-// informational nudge, recorded nowhere: WouldHave is none).
+// Prompt is called after a human prompt has reset the loops. After a turn
+// whose halt or denies reached the agent, it returns the note that they
+// are over (an informational nudge, recorded nowhere: WouldHave is none).
+// The notes are only ever set when the decision reached the agent.
 func (e *Engine) Prompt(s *session.SessionState) []event.Decision {
-	if !s.HaltNote {
+	note, reason := HaltOverNote, "first prompt after a halt"
+	switch {
+	case s.HaltNote:
+	case s.DenyNote:
+		note, reason = BlocksOverNote, "first prompt after a turn with blocks"
+	default:
 		return nil
 	}
-	s.HaltNote = false
-	if !s.Enforce {
-		return nil
+	s.HaltNote, s.DenyNote = false, false
+	return []event.Decision{{Action: event.ActionNudge, WouldHave: event.ActionNone, LoopKey: NoteKey, Message: note, Reason: reason, Seq: s.Seq()}}
+}
+
+// Loop keys of the decisions that aren't about a loop: the notes after a
+// halt or blocks, and the user's stop.
+const (
+	NoteKey = "note"
+	StopKey = "stop"
+)
+
+// Exempt reports whether a decision reaches the agent whatever the
+// session's level: the user's own stop, and the note that an earlier stop
+// or block is over (only ever given after one reached the agent).
+func Exempt(d event.Decision) bool {
+	return d.LoopKey == StopKey || d.LoopKey == NoteKey
+}
+
+// StopMessage is the stopReason of a halt the user asked for.
+const StopMessage = "Stopped by the user via loopguard stop."
+
+// Stop returns the halt that `loopguard stop` asked for, for the event
+// with seq. The caller checks that the session's level isn't observe:
+// a stop is the user's own request, so it applies at the notify and
+// assist levels too. first is false for the same stop's later halts
+// (the agent went on, e.g. after a late reply): those are not recorded
+// again (WouldHave none).
+func (e *Engine) Stop(s *session.SessionState, seq uint64, first bool) event.Decision {
+	s.HaltNote = true
+	would := event.ActionHalt
+	if !first {
+		would = event.ActionNone
 	}
-	return []event.Decision{{Action: event.ActionNudge, WouldHave: event.ActionNone, Message: HaltOverNote,
-		Reason: "first prompt after a halt", Seq: s.Seq()}}
+	return event.Decision{Action: event.ActionHalt, WouldHave: would, LoopKey: StopKey, Detector: event.DetectorUserStop,
+		Message: StopMessage, Reason: "stopped by the user (loopguard stop)", Severity: 1, Seq: seq}
 }
 
 // Post advances the state machine after a completed call c and the
@@ -166,7 +206,7 @@ func (e *Engine) onSignal(s *session.SessionState, c *event.ToolCall, sig event.
 		if !caps.Nudge || sig.Severity < e.th.NudgeThreshold {
 			return event.Decision{}, false
 		}
-		if l.Nudges > 0 && s.CallCount-l.LastNudgeCall < uint64(e.th.NudgeCooldownCalls) {
+		if l.Nudges > 0 && (caps.Once || s.CallCount-l.LastNudgeCall < uint64(e.th.NudgeCooldownCalls)) {
 			return event.Decision{}, false // cooldown
 		}
 		if s.NudgesThisTurn >= e.th.MaxNudgesPerTurn {
@@ -196,10 +236,10 @@ func (e *Engine) onSignal(s *session.SessionState, c *event.ToolCall, sig event.
 // the loop kept going after the first deny or has lasted too long, the
 // session would have been halted.
 //
-// In enforce mode a halted loop keeps halting matching actions until the
-// next human prompt resets the loops, in case the agent goes on anyway (a
-// halt reply that arrived too late is dropped). Observe mode records the
-// halt once.
+// At the guard level a halted loop keeps halting matching actions until
+// the next human prompt resets the loops, in case the agent goes on
+// anyway (a halt reply that arrived too late is dropped). Other levels
+// record the halt once.
 func (e *Engine) Pre(s *session.SessionState, c *event.ToolCall) []event.Decision {
 	var out []event.Decision
 	now := c.Event.ReceivedAt
@@ -210,7 +250,7 @@ func (e *Engine) Pre(s *session.SessionState, c *event.ToolCall) []event.Decisio
 		m := newMsg(s, l, now, c.Event.Cwd)
 		sig := event.Signal{Detector: l.Detector, LoopKey: l.Key, Severity: l.LastSeverity}
 		if l.Stage == session.StageHalted {
-			if s.Enforce {
+			if allows(s, event.ActionHalt) {
 				out = append(out, e.halt(s, l, sig, c, m.haltReason(false, 0, 0)))
 			}
 			continue
@@ -240,6 +280,9 @@ func (e *Engine) Pre(s *session.SessionState, c *event.ToolCall) []event.Decisio
 			out = append(out, e.halt(s, l, sig, c, m.haltReason(true, minutes, limit)))
 		default:
 			l.Denies++
+			if allows(s, event.ActionDeny) {
+				s.DenyNote = true
+			}
 			out = append(out, e.decision(s, l, sig, c.Seq(), event.ActionDeny, m.deny(c), fmt.Sprintf(
 				"action repeats a loop that kept going after a nudge (deny #%d)", l.Denies)))
 		}
@@ -248,7 +291,7 @@ func (e *Engine) Pre(s *session.SessionState, c *event.ToolCall) []event.Decisio
 }
 
 func (e *Engine) halt(s *session.SessionState, l *session.LoopState, sig event.Signal, c *event.ToolCall, reason string) event.Decision {
-	if s.Enforce {
+	if allows(s, event.ActionHalt) {
 		s.HaltNote = true
 	}
 	return e.decision(s, l, sig, c.Seq(), event.ActionHalt, haltMessage(reason, ShortSessionID(s.Key)), reason)
@@ -319,6 +362,12 @@ func (e *Engine) realChange(s *session.SessionState, l *session.LoopState) bool 
 	return false
 }
 
+// allows reports whether the session's level lets action a reach the
+// agent.
+func allows(s *session.SessionState, a event.Action) bool {
+	return a.Rank() > 0 && a.Rank() <= s.Allow.Rank()
+}
+
 // extra raises occurrence thresholds when a human approves each action.
 func (e *Engine) extra(s *session.SessionState) int {
 	if s.PermMode == permModeManual {
@@ -328,8 +377,8 @@ func (e *Engine) extra(s *session.SessionState) int {
 }
 
 func (e *Engine) decision(s *session.SessionState, l *session.LoopState, sig event.Signal, seq uint64, would event.Action, message, reason string) event.Decision {
-	action := event.ActionNone // observe mode
-	if s.Enforce {
+	action := event.ActionNone // a would-have only
+	if allows(s, would) {
 		action = would
 	}
 	return event.Decision{
@@ -408,6 +457,13 @@ func describe(sig event.Signal) string {
 		return fmt.Sprintf("%s: the same action ran %d times with the same result", sig.Detector, sig.Count)
 	case event.DetectorOscillation:
 		return fmt.Sprintf("%s: %s went back to a previous version %d times", sig.Detector, sig.Evidence.Path, sig.Count)
+	case event.DetectorReadThrash:
+		if sig.Evidence.Path != "" {
+			return fmt.Sprintf("%s: %s was read %d times with no change to it", sig.Detector, sig.Evidence.Path, sig.Count)
+		}
+		return fmt.Sprintf("%s: the same `%s` search ran %d times with the same result", sig.Detector, sig.Evidence.Family, sig.Count)
+	case event.DetectorStall:
+		return fmt.Sprintf("%s: %d calls with no visible progress (%d failed, %d repeated reads)", sig.Detector, sig.Count, sig.Evidence.Failures, sig.Evidence.Repeats)
 	}
 	return fmt.Sprintf("%s: count %d", sig.Detector, sig.Count)
 }

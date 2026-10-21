@@ -96,3 +96,9 @@ func (p *Pipeline) post(s *session.SessionState, ev *event.Event, fileHashAfter 
 	sigs := p.detect.Observe(s, c)
 	return Result{Call: c, Signals: sigs, Decisions: p.policy.Post(s, c, sigs)}
 }
+
+// Stop returns the halt `loopguard stop` asked for, on the session's
+// latest event (see policy.Engine.Stop).
+func (p *Pipeline) Stop(s *session.SessionState, first bool) event.Decision {
+	return p.policy.Stop(s, s.Seq(), first)
+}

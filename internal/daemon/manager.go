@@ -371,10 +371,13 @@ func (a *actor) handle(j job) {
 		return
 	}
 
-	a.state.Enforce = mode.Mode == config.ModeEnforce
+	a.state.Allow = event.ActionNone
+	if mode.Mode == config.ModeGuard {
+		a.state.Allow = event.ActionHalt
+	}
 	res := a.m.pipeFor(eff).Handle(a.state, ev, a.fileHash(ev))
 	d := pick(res.Decisions)
-	if !a.state.Enforce {
+	if a.state.Allow != event.ActionHalt {
 		d = observeOnly(d) // the policy already returns none; belt and braces
 	}
 	out, code := j.ad.Render(ev, d)

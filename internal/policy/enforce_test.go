@@ -35,7 +35,7 @@ func (f *fixture) escalate(t *testing.T) {
 
 func TestEnforceMode(t *testing.T) {
 	f := newFixture(config.Default())
-	f.s.Enforce = true
+	f.s.Allow = event.ActionHalt
 	if ds := f.post(0, rf(0.6)); len(ds) != 1 || ds[0].Action != event.ActionNudge || !strings.HasPrefix(ds[0].Message, "LoopGuard observation:") {
 		t.Fatalf("nudge: %+v", ds)
 	}
@@ -87,7 +87,7 @@ func TestSubagentNeverHalts(t *testing.T) {
 	th := config.Default()
 	th.Policy.HaltAfterMinutes = 1
 	f := newFixture(th)
-	f.s.Enforce, f.s.Subagent = true, true
+	f.s.Allow, f.s.Subagent = event.ActionHalt, true
 	f.escalate(t)
 	for i := 0; i < 10; i++ {
 		f.clock = f.clock.Add(time.Minute) // past halt_after_minutes too
@@ -174,10 +174,11 @@ func TestTemplates(t *testing.T) {
 	}
 
 	m := newMsg(s, loops[0], t0.Add(4*time.Minute), "")
-	want := "LoopGuard observation: `npm test` has failed 5 times in the last 4 min with the same error:\n" +
-		"  Error: token <REDACTED:anthropic_key> rejected\n" +
-		"  Expected: 110\n" +
-		"  Received: 100\n" +
+	want := "LoopGuard observation: `npm test` has failed 5 times in a row with the same error (first failure 4 min ago).\n" +
+		"Output excerpt:\n" +
+		"    Error: token <REDACTED:anthropic_key> rejected\n" +
+		"    Expected: 110\n" +
+		"    Received: 100\n" +
 		"Between attempts, these files were edited: src/cart.ts. The error did not change after any of these edits.\n" +
 		"Repeating similar edits is unlikely to change the result. Options that often help: re-reading the full error and the code it points to, checking assumptions (versions, config, env), trying a different approach, or asking the user."
 	if got := m.nudge(); got != want {
@@ -192,7 +193,7 @@ func TestTemplates(t *testing.T) {
 	if got := m.deny(cmd); !strings.HasPrefix(got, "LoopGuard blocked this command: it is the same `go test ./pkg/a` run") {
 		t.Errorf("deny names %q, want the command", got)
 	}
-	if got := newMsg(s, loops[2], t0.Add(20*time.Second), "").nudge(); !strings.Contains(got, "within the last minute with the same error.\nNo files were edited") {
+	if got := newMsg(s, loops[2], t0.Add(20*time.Second), "").nudge(); !strings.Contains(got, "in a row with the same error (first failure less than a minute ago).\nNo files were edited") {
 		t.Errorf("nudge without evidence: %s", got)
 	}
 	if got := newMsg(s, loops[1], t0, "").nudge(); !strings.Contains(got, "and 34 more") {

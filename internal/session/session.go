@@ -40,10 +40,12 @@ type SessionState struct {
 	TurnSeq   uint64 // seq at last human prompt
 	PermMode  string // latest permission_mode seen
 
-	// Enforce is set by the caller for each event: true when the session's
-	// effective mode is enforce, so the policy's decisions carry a real
-	// action. False (observe mode, replay) records would-have actions only.
-	Enforce bool
+	// Allow is set by the caller for each event, from the session's level
+	// (LLD §12): the strongest action that reaches the agent. ActionHalt
+	// (guard) lets every decision through, ActionNudge (assist) only
+	// nudges; none or "" (observe, notify, replay) records would-have
+	// actions only.
+	Allow event.Action
 	// Subagent is true for a subagent's stream. Its loops are nudged and
 	// denied inside the stream but never halt the parent's turn.
 	Subagent bool

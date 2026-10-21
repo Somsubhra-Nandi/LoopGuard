@@ -28,7 +28,9 @@ func newDriver(t *testing.T, enforce bool) *driver {
 	p := New(config.Default())
 	d := &driver{t: t, p: p, s: p.NewSession("claude-code:drv", event.AgentClaudeCode),
 		clock: time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC), perm: "auto"}
-	d.s.Enforce = enforce
+	if enforce {
+		d.s.Allow = event.ActionHalt
+	}
 	d.handle(&event.Event{Phase: event.PhasePrompt, Prompt: "fix it"})
 	return d
 }
@@ -63,7 +65,7 @@ func (d *driver) run(cmd, failure string, runFor, wait time.Duration) string {
 	for _, dec := range pre {
 		kind = string(dec.WouldHave)
 	}
-	if d.s.Enforce && (kind == "deny" || kind == "halt") {
+	if d.s.Allow == event.ActionHalt && (kind == "deny" || kind == "halt") {
 		return kind
 	}
 	d.clock = d.clock.Add(runFor + wait)
