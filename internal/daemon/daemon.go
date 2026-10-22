@@ -172,6 +172,11 @@ func Run(ctx context.Context, o Options) error {
 			log.Warn("loading stop requests", "err", err)
 		}
 		d.mgr.book.loadAnnounced(sctx, time.Now())
+		if names, err := st.RepoSpellings(sctx); err != nil {
+			log.Warn("loading repo names", "err", err)
+		} else {
+			d.mgr.repos.load(names)
+		}
 		cancel()
 	}
 	uh, _ := os.UserHomeDir()

@@ -61,6 +61,7 @@ type Manager struct {
 	stops    stops
 	book     *usageBook // usage, tool calls, and wall time for the budgets (D6)
 	tails    tails
+	repos    repoNames // one spelling per repo
 	notifier *notify.Dispatcher
 	st       *store.Store  // nil: memory-only
 	w        *store.Writer // nil: memory-only
@@ -633,6 +634,7 @@ func (a *actor) repoOf(cwd string) string {
 		}
 		dir = parent
 	}
+	r = a.m.repos.name(r)
 	a.repos[cwd] = r
 	return r
 }

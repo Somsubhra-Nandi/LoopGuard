@@ -3,14 +3,12 @@ package daemon
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/event"
+	"github.com/Somsubhra-Nandi/loopguard/internal/pathid"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
 
@@ -71,13 +69,8 @@ func (p *pauses) match(sessionID, repo, cwd string, now time.Time) (store.Pause,
 	return store.Pause{}, false
 }
 
-func cleanPath(p string) string {
-	p = filepath.Clean(p)
-	if runtime.GOOS == "windows" {
-		p = strings.ToLower(p)
-	}
-	return p
-}
+// cleanPath is a path's identity (case ignored on Windows and macOS).
+func cleanPath(p string) string { return pathid.Key(p) }
 
 func samePath(a, b string) bool { return cleanPath(a) == cleanPath(b) }
 
