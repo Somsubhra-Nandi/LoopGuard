@@ -479,13 +479,18 @@ type costsData struct {
 }
 
 // topCostsCached is report.TopCosts, kept for topCacheTTL: it reads the
-// transcripts of the last 7 days.
+// transcripts of the last 7 days. Its total is the overview's 7 days.
 func (d *Dashboard) topCostsCached() (*report.EstimateReport, error) {
 	d.topMu.Lock()
 	defer d.topMu.Unlock()
 	now := d.o.Now()
 	if d.topCost == nil && d.topErr == nil || now.Sub(d.topAt) > topCacheTTL {
-		d.topCost, d.topErr = report.TopCosts(d.o.Transcripts, d.pricing(), d.now())
+		ctx, cancel := context.WithTimeout(context.Background(), pageTimeout)
+		defer cancel()
+		if d.o.Backend != nil {
+			d.o.Backend.Flush()
+		}
+		d.topCost, d.topErr = report.TopCosts(ctx, d.o.Store, d.o.Transcripts, d.pricing(), d.now())
 		d.topAt = now
 	}
 	return d.topCost, d.topErr

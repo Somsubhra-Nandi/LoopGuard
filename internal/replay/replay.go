@@ -88,6 +88,9 @@ type Options struct {
 	// Pricing, if set, accounts for usage and API-equivalent cost (M4):
 	// per stream, per loop, and in the time spent inside loops.
 	Pricing *cost.Pricing
+	// CostFrom and CostTo, if set, limit the accounting to the model calls
+	// made in [CostFrom, CostTo) (a zero bound is open).
+	CostFrom, CostTo time.Time
 }
 
 // Costs is the usage and API-equivalent cost of a replay (with
@@ -403,7 +406,7 @@ func replayStream(p *pipeline.Pipeline, st Stream, opts Options) streamResult {
 	out.wasted, out.wastedN = union(spans)
 	in.finish(out.loops)
 	if sc != nil {
-		sum := sc.Summarize(opts.Pricing)
+		sum := sc.SummarizeWindow(opts.Pricing, opts.CostFrom, opts.CostTo)
 		out.cost = &StreamCost{Summary: sum, CallMessage: callMsg, Project: st.Project}
 		// The model calls inside loops: from the one that issued a loop's
 		// first call to the one that issued its last; overlaps count once.

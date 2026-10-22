@@ -231,3 +231,46 @@ func TestActions(t *testing.T) {
 		t.Error("back link left the dashboard")
 	}
 }
+
+// TestTopCostsMatchOverview: Top costs counts the sessions the overview
+// counts, over the same 7 days, so the two 7-day totals are equal; a
+// transcript of a session LoopGuard doesn't know adds nothing.
+func TestTopCostsMatchOverview(t *testing.T) {
+	f := newFixture(t)
+	// A session LoopGuard never saw, changed today: left out.
+	dir := filepath.Join(f.transcripts, "C--elsewhere")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"assistant","timestamp":"` + at.Add(-time.Hour).UTC().Format(time.RFC3339) + `","message":{"id":"msg_x","model":"claude-opus-5-5","role":"assistant",` +
+		`"content":[{"type":"text","text":"x"}],"usage":{"input_tokens":0,"output_tokens":5000000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "ffff0000-0000-4000-8000-000000000009.jsonl"), []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := f.login()
+	var ov overviewData
+	if err := json.Unmarshal(c.get("/ui/api/overview").Body.Bytes(), &ov); err != nil {
+		t.Fatal(err)
+	}
+	week := ov.Summary.Periods[1]
+	est, err := f.d.topCostsCached()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if week.Name != "7d" || week.CostUSD == 0 || est.CostUSD != week.CostUSD {
+		t.Errorf("top costs total %v, overview 7 days %v", est.CostUSD, week.CostUSD)
+	}
+	if est.Streams != 1 {
+		t.Errorf("top costs read %d streams, want 1 (the known session's)", est.Streams)
+	}
+	var shares float64
+	for _, g := range est.Top {
+		shares += g.EstShare
+	}
+	if shares > 1+1e-9 {
+		t.Errorf("shares add up to %v", shares)
+	}
+	if html := c.get("/ui/costs").Body.String(); !strings.Contains(html, cost.FormatUSD(week.CostUSD)+" in all") {
+		t.Errorf("costs page lacks the 7-day total %s", cost.FormatUSD(week.CostUSD))
+	}
+}

@@ -309,17 +309,60 @@ func MergeSpans(sps []store.LoopSpan) [][2]time.Time {
 	return out
 }
 
-// TopCosts ranks the tool calls in the transcripts changed in the last 7
-// days by estimated cost (the database keeps no output sizes).
-func TopCosts(path string, pricing *cost.Pricing, at time.Time) (*EstimateReport, error) {
-	streams, err := replay.Discover(path, replay.Filter{Since: at.Add(-7 * 24 * time.Hour)})
+// TopCosts ranks the tool calls of the last 7 days (before at) by
+// estimated cost, from the transcripts (the database keeps no output
+// sizes). With a database it counts what the summary's 7 days count: the
+// sessions with usage recorded since then, and only their model calls made
+// since then; its total is the summary's 7-day cost. Without one, every
+// transcript changed in the 7 days counts, whole.
+func TopCosts(ctx context.Context, st *store.Store, path string, pricing *cost.Pricing, at time.Time) (*EstimateReport, error) {
+	since := at.Add(-7 * 24 * time.Hour)
+	streams, err := replay.Discover(path, replay.Filter{Since: since})
 	if err != nil {
 		return nil, err
 	}
-	res := replay.Run(streams, replay.Options{Thresholds: config.Default(), Pricing: pricing})
+	if st == nil {
+		res := replay.Run(streams, replay.Options{Thresholds: config.Default(), Pricing: pricing})
+		top, largest := res.Costs.Estimates(TopEstimates, nil)
+		return &EstimateReport{Window: "transcripts changed in the last 7 days", Streams: len(streams),
+			CostUSD: res.Costs.CostUSD, Top: top, Largest: largest}, nil
+	}
+	rows, err := st.UsageRows(ctx, store.UsageFilter{Since: since})
+	if err != nil {
+		return nil, err
+	}
+	known := map[string]bool{}
+	var total float64
+	for i, p := range Price(rows, pricing) {
+		known[rows[i].SessionID] = true
+		if p.Priced {
+			total += p.USD
+		}
+	}
+	kept := streams[:0]
+	for _, s := range streams {
+		if known[s.SessionID] {
+			kept = append(kept, s)
+		}
+	}
+	res := replay.Run(kept, replay.Options{Thresholds: config.Default(), Pricing: pricing, CostFrom: since})
 	top, largest := res.Costs.Estimates(TopEstimates, nil)
-	return &EstimateReport{Window: "transcripts changed in the last 7 days", Streams: len(streams),
-		CostUSD: res.Costs.CostUSD, Top: top, Largest: largest}, nil
+	// Shares of the recorded total (a session whose transcript is gone
+	// counts in it, not in the estimates).
+	for i := range top {
+		top[i].EstShare = share(top[i].EstUSD, total)
+	}
+	for i := range largest {
+		largest[i].EstShare = share(largest[i].EstUSD, total)
+	}
+	return &EstimateReport{Window: "last 7 days", Streams: len(kept), CostUSD: total, Top: top, Largest: largest}, nil
+}
+
+func share(part, total float64) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return part / total
 }
 
 // UsageMessage turns a stored usage row back into a message to price.

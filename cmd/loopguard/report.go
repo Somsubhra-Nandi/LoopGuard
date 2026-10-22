@@ -105,7 +105,7 @@ func buildSummaryReport(dir, path string, pricing *cost.Pricing, at time.Time) r
 	if dbErr != nil {
 		r.Errors = append([]string{"database: " + dbErr.Error()}, r.Errors...)
 	}
-	est, err := report.TopCosts(path, pricing, at)
+	est, err := report.TopCosts(ctx, st, path, pricing, at)
 	if err != nil {
 		r.Errors = append(r.Errors, "transcripts: "+err.Error())
 		return r

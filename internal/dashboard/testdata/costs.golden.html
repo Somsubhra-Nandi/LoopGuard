@@ -22,17 +22,17 @@
 <main>
 
 <h1>Top costs</h1>
-<p class="sub">The 10 kinds of tool call with the highest estimated cost in the transcripts changed in the last 7 days (1 streams, $0.06 in all, API-equivalent).</p>
+<p class="sub">The 10 kinds of tool call with the highest estimated cost in the last 7 days (1 streams, $2.77 in all, API-equivalent).</p>
 
 <section class="card">
   <h2>Top 4 by estimated cost <abbr title="estimate">est.</abbr></h2>
   <div class="scroll"><table>
     <thead><tr><th>Family or tool + target</th><th class="num">Runs</th><th class="num">Avg output</th><th class="num">Est. cost</th><th class="num">Est. share</th></tr></thead>
     <tbody>
-    <tr><td>read logs/big.log</td><td class="num">1</td><td class="num">50.0k tok</td><td class="num">$0.01</td><td class="num">20.0%</td></tr>
-    <tr><td>bash: jest</td><td class="num">5</td><td class="num">78 tok</td><td class="num">$0.0055</td><td class="num">9.9%</td></tr>
-    <tr><td>edit src/cart.js</td><td class="num">4</td><td class="num">16 tok</td><td class="num">$0.0041</td><td class="num">7.4%</td></tr>
-    <tr><td>bash: ls src</td><td class="num">1</td><td class="num">4 tok</td><td class="num">$0.0010</td><td class="num">1.8%</td></tr>
+    <tr><td>read logs/big.log</td><td class="num">1</td><td class="num">50.0k tok</td><td class="num">$0.01</td><td class="num">0.4%</td></tr>
+    <tr><td>bash: jest</td><td class="num">5</td><td class="num">78 tok</td><td class="num">$0.0055</td><td class="num">0.2%</td></tr>
+    <tr><td>edit src/cart.js</td><td class="num">4</td><td class="num">16 tok</td><td class="num">$0.0041</td><td class="num">0.1%</td></tr>
+    <tr><td>bash: ls src</td><td class="num">1</td><td class="num">4 tok</td><td class="num">$0.0010</td><td class="num">0.0%</td></tr>
     </tbody>
   </table></div>
   <p class="sub">A call's estimate: its share of the output of the model call that issued it, plus its result (about 4 characters per token) carried as input by every later model call until the next compaction.</p>
@@ -42,11 +42,11 @@
   <div class="scroll"><table>
     <thead><tr><th>Session</th><th class="num">Call</th><th>Family or tool + target</th><th class="num">Result</th><th class="num">Carried</th><th class="num">Est. cost</th><th class="num">Est. share</th></tr></thead>
     <tbody>
-    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">10</td><td>read logs/big.log</td><td class="num">50.0k tok</td><td class="num">1×</td><td class="num">$0.01</td><td class="num">20.0%</td></tr>
-    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">1</td><td>bash: jest</td><td class="num">78 tok</td><td class="num">10×</td><td class="num">$0.0012</td><td class="num">2.1%</td></tr>
-    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">3</td><td>bash: jest</td><td class="num">78 tok</td><td class="num">8×</td><td class="num">$0.0011</td><td class="num">2.0%</td></tr>
-    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">5</td><td>bash: jest</td><td class="num">78 tok</td><td class="num">6×</td><td class="num">$0.0011</td><td class="num">2.0%</td></tr>
-    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">7</td><td>bash: jest</td><td class="num">78 tok</td><td class="num">4×</td><td class="num">$0.0011</td><td class="num">1.9%</td></tr>
+    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">10</td><td>read logs/big.log</td><td class="num">50.0k tok</td><td class="num">1×</td><td class="num">$0.01</td><td class="num">0.4%</td></tr>
+    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">1</td><td>bash: jest</td><td class="num">78 tok</td><td class="num">10×</td><td class="num">$0.0012</td><td class="num">0.0%</td></tr>
+    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">3</td><td>bash: jest</td><td class="num">78 tok</td><td class="num">8×</td><td class="num">$0.0011</td><td class="num">0.0%</td></tr>
+    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">5</td><td>bash: jest</td><td class="num">78 tok</td><td class="num">6×</td><td class="num">$0.0011</td><td class="num">0.0%</td></tr>
+    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">7</td><td>bash: jest</td><td class="num">78 tok</td><td class="num">4×</td><td class="num">$0.0011</td><td class="num">0.0%</td></tr>
     </tbody>
   </table></div>
 </section>

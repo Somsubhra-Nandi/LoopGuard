@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"sort"
+	"time"
 	"unicode/utf8"
 )
 
@@ -255,12 +256,26 @@ type Summary struct {
 	Calls []CallEstimate `json:"calls"`
 	// MessageCost is each message's cost (ledger order; 0 if unpriced).
 	MessageCost []float64 `json:"-"`
+	// MessageTimes are the times of the messages counted.
+	MessageTimes []time.Time `json:"-"`
 }
 
 // Summarize prices the stream and estimates each tool call's cost.
 func (s *Scanner) Summarize(p *Pricing) Summary {
+	return s.SummarizeWindow(p, time.Time{}, time.Time{})
+}
+
+// SummarizeWindow is Summarize counting only the model calls made in
+// [from, to) (a zero bound is open; a message without a time counts): the
+// usage and cost, and per tool call what the calls in the window spent on
+// it. Calls issued before the window whose results were carried in it are
+// kept; others with nothing in it are left out.
+func (s *Scanner) SummarizeWindow(p *Pricing, from, to time.Time) Summary {
 	msgs := s.ledger.Messages()
-	sum := Summary{Messages: len(msgs), Usage: s.ledger.Total(), Compactions: s.compacts, MessageCost: make([]float64, len(msgs))}
+	in := func(m Message) bool {
+		return m.TS.IsZero() || ((from.IsZero() || !m.TS.Before(from)) && (to.IsZero() || m.TS.Before(to)))
+	}
+	sum := Summary{Compactions: s.compacts, MessageCost: make([]float64, len(msgs))}
 	byModel := map[string]*ModelUsage{}
 	turns := map[int]*TurnCost{}
 	// carry[i] is what carrying one token of a result costs at message i:
@@ -268,6 +283,12 @@ func (s *Scanner) Summarize(p *Pricing) Summary {
 	// input price.
 	carry := make([]float64, len(msgs))
 	for i, m := range msgs {
+		if !in(m) {
+			continue
+		}
+		sum.Messages++
+		sum.Usage = sum.Usage.Add(m.Usage)
+		sum.MessageTimes = append(sum.MessageTimes, m.TS)
 		usd, ok := p.Cost(m)
 		mu := byModel[m.Model]
 		if mu == nil {
@@ -328,7 +349,8 @@ func (s *Scanner) Summarize(p *Pricing) Summary {
 			e.Group = u.name
 		}
 		m := msgs[u.msg]
-		if n := s.perMsg[u.msg]; n > 0 {
+		issued := in(m)
+		if n := s.perMsg[u.msg]; n > 0 && issued {
 			e.OutputTokens = float64(m.Usage.Output) / float64(n)
 		}
 		outRate, okOut := p.OutputRate(m.Model)
@@ -342,6 +364,9 @@ func (s *Scanner) Summarize(p *Pricing) Summary {
 				e.LaterCalls = count[u.after]
 				e.EstUSD += float64(float64(e.ResultTokens) * suffix[u.after])
 			}
+		}
+		if !issued && e.EstUSD == 0 {
+			continue
 		}
 		total += e.EstUSD
 		sum.Calls = append(sum.Calls, e)
