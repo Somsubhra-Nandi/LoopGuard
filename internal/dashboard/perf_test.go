@@ -25,8 +25,9 @@ func TestPagePerformance(t *testing.T) {
 		t.Skip("short")
 	}
 	f := newFixture(t)
-	// A few large transactions (the default writer flushes every 100 rows).
-	w := f.st.NewWriter(store.WriterOptions{QueueSize: 100_000, BatchSize: 20_000, FlushEvery: time.Hour})
+	// Large transactions (the default writer flushes every 100 rows), each
+	// small enough to commit within the writer's 10s timeout under -race.
+	w := f.st.NewWriter(store.WriterOptions{QueueSize: 100_000, BatchSize: 2_000, FlushEvery: time.Hour})
 	for i := 0; i < 500; i++ {
 		sid := fmt.Sprintf("perf%04d-0000-4000-8000-000000000000", i)
 		key := "claude-code:" + sid

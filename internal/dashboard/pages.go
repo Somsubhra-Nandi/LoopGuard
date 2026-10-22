@@ -365,7 +365,10 @@ func (d *Dashboard) buildDetail(ctx context.Context, id string) (detailData, err
 		if dd.Found {
 			for _, k := range dd.Row.Keys {
 				ivs, _ := d.o.Store.Interventions(ctx, k, 200)
-				dd.Other = append(dd.Other, ivs...)
+				for _, iv := range ivs {
+					iv.TS = iv.TS.In(d.o.Location)
+					dd.Other = append(dd.Other, iv)
+				}
 			}
 		}
 	} else {
