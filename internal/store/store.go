@@ -15,6 +15,8 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/Somsubhra-Nandi/loopguard/internal/pathid"
+
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
 )
 
@@ -55,6 +57,11 @@ func Open(path string) (*Store, error) {
 	if err := migrate(ctx, db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrating %s: %w", path, err)
+	}
+	// Repos stored in two spellings of one path merge (Windows, macOS). Not
+	// fatal: it is tried again on the next open.
+	if pathid.CaseInsensitive {
+		_, _ = s.mergeRepoCase(ctx, pathid.FoldKey)
 	}
 	return s, nil
 }
