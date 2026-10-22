@@ -9,7 +9,7 @@
     <thead><tr><th>Where</th><th>Level</th><th>Why</th><th></th></tr></thead>
     <tbody>
     {{- range .Repos}}
-    <tr><td title="{{.Repo}}">{{.Name}}{{if .File}}<br><span class="sub">{{.File}}</span>{{end}}{{range .Notes}}<br><span class="sub warn">{{.}}</span>{{end}}</td>
+    <tr><td title="{{.Shown}}">{{.Name}}{{if .File}}<br><span class="sub">{{.File}}</span>{{end}}{{range .Notes}}<br><span class="sub warn">{{.}}</span>{{end}}</td>
       <td>{{template "level" .Mode}}</td><td>{{.Why}}</td><td>{{template "buttons" .Buttons}}</td></tr>
     {{- end}}
     <tr><td>{{.Global.Name}}</td><td>{{template "level" .Global.Mode}}</td><td>{{.Global.Why}}</td><td></td></tr>

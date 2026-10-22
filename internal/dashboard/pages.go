@@ -12,6 +12,7 @@ import (
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
+	"github.com/Somsubhra-Nandi/loopguard/internal/pathid"
 	"github.com/Somsubhra-Nandi/loopguard/internal/report"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
@@ -174,8 +175,10 @@ type sessionView struct {
 	LevelWhy string `json:"level_why"`
 	LevelNow bool   `json:"level_is_current"` // not live: the level its next event would get
 	Name     string `json:"-"`
+	Shown    string `json:"-"` // the project, home as ~
 	Started  string `json:"-"`
-	Duration string `json:"-"`
+	Duration string `json:"-"` // active time
+	Wall     string `json:"-"` // wall-clock time, first event to last
 }
 
 const sessionLimit = 1000
@@ -215,16 +218,24 @@ func (d *Dashboard) buildSessions(ctx context.Context, q url.Values) (sessionsDa
 	if len(rows) > sessionLimit {
 		rows, sd.Truncated = rows[:sessionLimit], true
 	}
-	projects := map[string]bool{}
+	// A project is one path however it was spelled (case, on Windows and
+	// macOS): listed once, in its first spelling.
+	projects := map[string]string{}
 	live := d.live()
 	for _, row := range rows {
-		projects[row.Project] = true
-		if sd.Project != "" && row.Project != sd.Project {
+		if k := pathid.Key(row.Project); projects[k] == "" {
+			projects[k] = row.Project
+		}
+		if sd.Project != "" && !pathid.Same(row.Project, sd.Project) {
 			continue
 		}
 		sd.Rows = append(sd.Rows, d.sessionView(row, live))
 	}
-	sd.Projects = report.SortedKeys(projects)
+	set := map[string]bool{}
+	for _, p := range projects {
+		set[p] = true
+	}
+	sd.Projects = report.SortedKeys(set)
 	switch sd.Sort {
 	case "cost":
 		sort.SliceStable(sd.Rows, func(i, j int) bool { return sd.Rows[i].CostUSD > sd.Rows[j].CostUSD })
@@ -246,7 +257,7 @@ func (d *Dashboard) live() map[string]Live {
 
 func (d *Dashboard) sessionView(row report.SessionRow, live map[string]Live) sessionView {
 	v := sessionView{SessionRow: row, Name: baseName(row.Project), Started: row.StartedAt.In(d.o.Location).Format("2006-01-02 15:04"),
-		Duration: report.ShortDuration(row.Duration())}
+		Duration: report.ShortDuration(row.Active()), Wall: report.ShortDuration(row.Duration()), Shown: d.path(row.Project)}
 	if v.Name == "" {
 		v.Name = shortID(row.SessionID)
 	}
@@ -349,7 +360,7 @@ func (d *Dashboard) buildDetail(ctx context.Context, id string) (detailData, err
 					switch {
 					case ps.Scope == store.PauseSession && ps.Target == id:
 						dd.Paused = pauseText(ps, d.o.Location)
-					case ps.Scope == store.PauseRepo && row.Repo != "" && ps.Target == row.Repo:
+					case ps.Scope == store.PauseRepo && row.Repo != "" && pathid.Same(ps.Target, row.Repo):
 						dd.RepoPaused = pauseText(ps, d.o.Location)
 					}
 				}
@@ -360,7 +371,7 @@ func (d *Dashboard) buildDetail(ctx context.Context, id string) (detailData, err
 	if err != nil {
 		dd.ReportError = err.Error()
 		if errors.Is(err, report.ErrNoTranscript) {
-			dd.ReportError = "No transcript of this session under " + d.o.Transcripts + ", so there is no timeline."
+			dd.ReportError = "No transcript of this session under " + d.path(d.o.Transcripts) + ", so there is no timeline."
 		}
 		if dd.Found {
 			for _, k := range dd.Row.Keys {
@@ -500,7 +511,7 @@ func (d *Dashboard) topCosts(w http.ResponseWriter, r *http.Request, s *uiSessio
 	est, err := d.topCostsCached()
 	cd := costsData{Estimates: est}
 	if err != nil {
-		cd.Error = "Reading the transcripts under " + d.o.Transcripts + ": " + err.Error()
+		cd.Error = "Reading the transcripts under " + d.path(d.o.Transcripts) + ": " + err.Error()
 	}
 	d.render(w, http.StatusOK, "costs", view{Title: "Top costs", Nav: "costs", CSRF: s.CSRF, Data: cd})
 }
@@ -526,11 +537,11 @@ type settingsData struct {
 }
 
 type levelRow struct {
-	Repo, Name, Mode, Why string
-	File                  string
-	Notes                 []string
-	Paused                bool
-	Buttons               buttons
+	Repo, Shown, Name, Mode, Why string
+	File                         string
+	Notes                        []string
+	Paused                       bool
+	Buttons                      buttons
 }
 
 type detectorRow struct {
@@ -551,7 +562,7 @@ type channelRow struct {
 func (d *Dashboard) settings(w http.ResponseWriter, r *http.Request, s *uiSession) {
 	ctx, cancel := d.ctx(r)
 	defer cancel()
-	sd := settingsData{Version: d.o.Version, Home: d.o.Home, CSRF: s.CSRF, Example: config.ExampleBudget}
+	sd := settingsData{Version: d.o.Version, Home: d.path(d.o.Home), CSRF: s.CSRF, Example: config.ExampleBudget}
 	b := d.o.Backend
 	if b == nil {
 		d.errorPage(w, r, http.StatusServiceUnavailable, "Settings unavailable", "The daemon's configuration is not available.")
@@ -559,11 +570,12 @@ func (d *Dashboard) settings(w http.ResponseWriter, r *http.Request, s *uiSessio
 	}
 	g := b.Config("")
 	sd.Config = g.Global
+	sd.Config.Path = d.path(sd.Config.Path)
 	if g.Global.Err != nil {
 		sd.ConfigErr = g.Global.Err.Error()
 	}
 	gm := b.Level("", "", "")
-	sd.Global = levelRow{Name: "everywhere else", Mode: gm.Mode, Why: gm.Why, File: g.Global.Path}
+	sd.Global = levelRow{Name: "everywhere else", Mode: gm.Mode, Why: gm.Why, File: d.path(g.Global.Path)}
 
 	paused := map[string]bool{}
 	if d.o.Store != nil {
@@ -574,26 +586,29 @@ func (d *Dashboard) settings(w http.ResponseWriter, r *http.Request, s *uiSessio
 				case store.PauseSession:
 					desc = "session " + shortID(p.Target)
 				case store.PauseRepo:
-					desc = "repo " + p.Target
-					paused[p.Target] = true
+					desc = "repo " + d.path(p.Target)
+					paused[pathid.Key(p.Target)] = true
 				}
 				sd.Pauses = append(sd.Pauses, desc+": "+pauseText(p, d.o.Location))
 			}
 		}
 		repos := map[string]bool{}
+		seen := map[string]bool{} // one row per repo, however spelled
 		if rows, err := d.o.Store.ListSessions(ctx, store.ListOptions{Since: d.o.Now().Add(-30 * 24 * time.Hour), Limit: 100000}); err == nil {
 			for _, row := range rows {
 				if row.Repo != "" && row.SessionID != report.DoctorSession {
-					repos[row.Repo] = true
+					if k := pathid.Key(row.Repo); !seen[k] {
+						seen[k], repos[row.Repo] = true, true
+					}
 				}
 			}
 		}
 		for _, repo := range report.SortedKeys(repos) {
 			e := b.Config(repo)
 			m := b.Level("", repo, repo)
-			lr := levelRow{Repo: repo, Name: baseName(repo), Mode: m.Mode, Why: m.Why, Notes: e.Notes, Paused: paused[repo]}
+			lr := levelRow{Repo: repo, Shown: d.path(repo), Name: baseName(repo), Mode: m.Mode, Why: m.Why, Notes: e.Notes, Paused: paused[pathid.Key(repo)]}
 			if e.Repo.Exists {
-				lr.File = e.Repo.Path
+				lr.File = d.path(e.Repo.Path)
 			}
 			bt := button{Action: actPauseRepo, Target: repo, Label: "Pause", Back: "/ui/settings", Pause: true}
 			if lr.Paused {
@@ -667,6 +682,7 @@ func (d *Dashboard) settings(w http.ResponseWriter, r *http.Request, s *uiSessio
 		sd.NotifyNote = "Nothing is sent at the " + gm.Mode + " level."
 	}
 	_, sd.Pricing = b.Pricing()
+	sd.Pricing.Path = d.path(sd.Pricing.Path)
 	d.render(w, http.StatusOK, "settings", view{Title: "Settings", Nav: "settings", CSRF: s.CSRF, Notices: d.notices(nil), Data: sd})
 }
 

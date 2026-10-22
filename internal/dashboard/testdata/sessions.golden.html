@@ -43,12 +43,12 @@
   <button type="submit">Show</button>
 </form>
 <div class="scroll card flush"><table class="sessions">
-  <thead><tr><th>Project</th><th>Started</th><th class="num">Duration</th><th class="num">Tool calls</th><th class="num">Failures</th><th class="num">Loops</th><th class="num">Cost</th><th>Level</th></tr></thead>
+  <thead><tr><th>Project</th><th>Started</th><th class="num" title="Active time: gaps over 30 minutes between events count as idle">Active</th><th class="num">Tool calls</th><th class="num">Failures</th><th class="num">Loops</th><th class="num">Cost</th><th>Level</th></tr></thead>
   <tbody>
   <tr class="has-loops">
     <td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001" title="/work/shop">shop</a> <span class="id">aaaa1111</span> <span class="badge live">live</span></td>
     <td>2026-10-21 13:00</td>
-    <td class="num">12m</td>
+    <td class="num" title="active; 12m wall clock">12m</td>
     <td class="num">12</td>
     <td class="num">5</td>
     <td class="num">1</td>
@@ -58,17 +58,17 @@
   <tr>
     <td><a href="/ui/sessions/bbbb2222-0000-4000-8000-000000000002" title="/work/api">api</a> <span class="id">bbbb2222</span></td>
     <td>2026-10-18 15:00</td>
-    <td class="num">30m</td>
+    <td class="num" title="active; 30m wall clock">30m</td>
     <td class="num">35</td>
     <td class="num">2</td>
     <td class="num">0</td>
-    <td class="num">$1.81</td>
+    <td class="num">$1.81 <span class="warn" title="The transcript is gone and LoopGuard never read it, so some usage is missing">usage incomplete</span></td>
     <td title="paused"><span class="level level-observe">observe</span> <span class="muted">now</span></td>
   </tr>
   <tr>
     <td><a href="/ui/sessions/cccc3333-0000-4000-8000-000000000003" title="/tmp/scratch">scratch</a> <span class="id">cccc3333</span></td>
     <td>2026-10-01 15:00</td>
-    <td class="num">3m</td>
+    <td class="num" title="active; 3m wall clock">3m</td>
     <td class="num">3</td>
     <td class="num">0</td>
     <td class="num">0</td>

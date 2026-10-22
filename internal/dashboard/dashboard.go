@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
+	"github.com/Somsubhra-Nandi/loopguard/internal/pathid"
 	"github.com/Somsubhra-Nandi/loopguard/internal/report"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
@@ -102,7 +104,9 @@ type Options struct {
 	Port        int    // the daemon's port, for the Host check and links
 	Version     string
 	Home        string
-	Log         *slog.Logger
+	// UserHome is shown as ~ in paths (default: the user's home directory).
+	UserHome string
+	Log      *slog.Logger
 	// Now, Location, and Random make tests deterministic (defaults:
 	// time.Now, time.Local, crypto/rand).
 	Now      func() time.Time
@@ -134,6 +138,9 @@ func New(o Options) *Dashboard {
 	}
 	if o.Location == nil {
 		o.Location = time.Local
+	}
+	if o.UserHome == "" {
+		o.UserHome, _ = os.UserHomeDir()
 	}
 	if o.Random == nil {
 		o.Random = rand.Reader
@@ -218,3 +225,6 @@ func (d *Dashboard) NewLoginLink() (string, time.Time, error) {
 
 // now is the current time in the dashboard's location.
 func (d *Dashboard) now() time.Time { return d.o.Now().In(d.o.Location) }
+
+// path shows a path with the user's home as ~.
+func (d *Dashboard) path(p string) string { return pathid.TildeIn(p, d.o.UserHome) }

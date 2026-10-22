@@ -24,17 +24,17 @@
 </form>
 {{- if .Rows}}
 <div class="scroll card flush"><table class="sessions">
-  <thead><tr><th>Project</th><th>Started</th><th class="num">Duration</th><th class="num">Tool calls</th><th class="num">Failures</th><th class="num">Loops</th><th class="num">Cost</th><th>Level</th></tr></thead>
+  <thead><tr><th>Project</th><th>Started</th><th class="num" title="Active time: gaps over 30 minutes between events count as idle">Active</th><th class="num">Tool calls</th><th class="num">Failures</th><th class="num">Loops</th><th class="num">Cost</th><th>Level</th></tr></thead>
   <tbody>
   {{- range .Rows}}
   <tr{{if .Loops}} class="has-loops"{{end}}>
-    <td><a href="/ui/sessions/{{.SessionID}}" title="{{.Project}}">{{.Name}}</a> <span class="id">{{short .SessionID}}</span>{{if .Active}} <span class="badge live">live</span>{{end}}</td>
+    <td><a href="/ui/sessions/{{.SessionID}}" title="{{.Shown}}">{{.Name}}</a> <span class="id">{{short .SessionID}}</span>{{if .Active}} <span class="badge live">live</span>{{end}}</td>
     <td>{{.Started}}</td>
-    <td class="num">{{.Duration}}</td>
+    <td class="num" title="active; {{.Wall}} wall clock">{{.Duration}}</td>
     <td class="num">{{.ToolCalls}}</td>
     <td class="num">{{.Failures}}</td>
     <td class="num">{{.Loops}}</td>
-    <td class="num">{{usd .CostUSD}}{{if .UnpricedTokens}} <span class="warn" title="{{count .UnpricedTokens}} tokens not priced">+?</span>{{end}}</td>
+    <td class="num">{{usd .CostUSD}}{{if .UnpricedTokens}} <span class="warn" title="{{count .UnpricedTokens}} tokens not priced">+?</span>{{end}}{{if .UsageIncomplete}} <span class="warn" title="The transcript is gone and LoopGuard never read it, so some usage is missing">usage incomplete</span>{{end}}</td>
     <td title="{{.LevelWhy}}">{{template "level" .Level}}{{if .LevelNow}} <span class="muted">now</span>{{end}}</td>
   </tr>
   {{- end}}

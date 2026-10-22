@@ -127,10 +127,10 @@ func (d *Dashboard) parseAct(ctx context.Context, f url.Values) (act, error) {
 		a.Text = "Session " + a.Target + " gets its configured level again (a pause of its repo, or of everything, still applies)."
 	case actPauseRepo:
 		a.Title, a.Button = "Pause repo "+baseName(a.Target)+"?", "Pause it"
-		a.Text = "Every session in " + a.Target + " is only recorded " + length + ": no notifications, nudges, blocks, or stops."
+		a.Text = "Every session in " + d.path(a.Target) + " is only recorded " + length + ": no notifications, nudges, blocks, or stops."
 	case actResumeRepo:
 		a.Title, a.Button = "Resume repo "+baseName(a.Target)+"?", "Resume it"
-		a.Text = "Sessions in " + a.Target + " get their configured level again."
+		a.Text = "Sessions in " + d.path(a.Target) + " get their configured level again."
 	case actStop:
 		a.Title, a.Button = "Stop session "+shortID(a.Target)+"'s turn?", "Stop the turn"
 		a.Text = "The next tool call of session " + a.Target + " (or of its subagents) is blocked and its turn ends, as with " +
@@ -204,7 +204,7 @@ func (d *Dashboard) perform(ctx context.Context, a act) (string, error) {
 		if err := st.SetPause(ctx, store.Pause{Scope: scope, Target: a.Target, Until: until, CreatedAt: now}); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Paused %s %s: %s.%s", scope, a.Target, pauseText(store.Pause{Until: until}, d.o.Location), reload()), nil
+		return fmt.Sprintf("Paused %s %s: %s.%s", scope, d.path(a.Target), pauseText(store.Pause{Until: until}, d.o.Location), reload()), nil
 	case actResumeSession, actResumeRepo:
 		scope := store.PauseSession
 		if a.Kind == actResumeRepo {
@@ -215,9 +215,9 @@ func (d *Dashboard) perform(ctx context.Context, a act) (string, error) {
 			return "", err
 		}
 		if n == 0 {
-			return "Nothing to resume: " + scope + " " + a.Target + " was not paused.", nil
+			return "Nothing to resume: " + scope + " " + d.path(a.Target) + " was not paused.", nil
 		}
-		return "Resumed " + scope + " " + a.Target + "." + reload(), nil
+		return "Resumed " + scope + " " + d.path(a.Target) + "." + reload(), nil
 	case actStop:
 		res := d.o.Backend.Stop(a.Target)
 		if !res.Stopped {

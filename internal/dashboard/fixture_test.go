@@ -152,7 +152,7 @@ func newFixture(t *testing.T) *fixture {
 	f.be.reloads = 0
 
 	f.d = New(Options{Store: st, Backend: f.be, Transcripts: f.transcripts, Port: testPort, Version: "test", Home: f.home,
-		Now: f.now, Location: time.UTC, Random: zeros{}})
+		Now: f.now, Location: time.UTC, Random: zeros{}, UserHome: f.home})
 	return f
 }
 
@@ -196,8 +196,10 @@ func (f *fixture) writeTranscript() string {
 func seedStore(t *testing.T, st *store.Store, loopKey string) {
 	t.Helper()
 	w := st.NewWriter(store.WriterOptions{})
+	// sidAPI's transcript is gone, never read: its usage is incomplete.
+	transcripts := map[string]string{"claude-code:" + sidAPI: "/gone/" + sidAPI + ".jsonl"}
 	session := func(key, sid, repo, cwd string, start time.Time, calls, failures int, ended bool) {
-		s := store.Session{Key: key, Agent: "claude-code", SessionID: sid, Repo: repo, Cwd: cwd, StartedAt: start,
+		s := store.Session{Key: key, Agent: "claude-code", SessionID: sid, Repo: repo, Cwd: cwd, StartedAt: start, Transcript: transcripts[key],
 			LastSeenAt: start.Add(time.Duration(calls) * time.Minute), ToolCalls: int64(calls), Failures: int64(failures)}
 		if ended {
 			s.EndedAt = s.LastSeenAt

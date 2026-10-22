@@ -7,12 +7,12 @@
   <div class="summary">
     {{- if .Found}}
     <dl class="stats wide">
-      <dt>Project</dt><dd>{{.Row.Project}}</dd>
-      <dt>Started</dt><dd>{{.Row.Started}} · {{.Row.Duration}} (last event {{.LastSeen}})</dd>
+      <dt>Project</dt><dd>{{.Row.Shown}}</dd>
+      <dt>Started</dt><dd>{{.Row.Started}} · <span title="gaps over 30 minutes between events count as idle">{{.Row.Duration}} active</span> ({{.Row.Wall}} wall clock, last event {{.LastSeen}})</dd>
       <dt>Level</dt><dd>{{template "level" .Row.Level}} {{.Row.LevelWhy}}{{if .Row.LevelNow}} (not active: the level its next event would get){{end}}</dd>
       {{- if .Paused}}<dt>Session</dt><dd class="warn">{{.Paused}}</dd>{{end}}
       {{- if .RepoPaused}}<dt>Repo</dt><dd class="warn">{{.RepoPaused}}</dd>{{end}}
-      <dt>Recorded live</dt><dd>tool calls {{.Row.ToolCalls}}, failures {{.Row.Failures}}, loops {{.Row.Loops}}, tokens {{count .Row.Tokens}}, cost {{usd .Row.CostUSD}}</dd>
+      <dt>Recorded live</dt><dd>tool calls {{.Row.ToolCalls}}, failures {{.Row.Failures}}, loops {{.Row.Loops}}, tokens {{count .Row.Tokens}}, cost {{usd .Row.CostUSD}}{{if .Row.UsageIncomplete}} <span class="warn">usage incomplete: the transcript is gone and LoopGuard never read it</span>{{end}}</dd>
     </dl>
     {{- else}}
     <p class="sub">LoopGuard didn't watch this session live; everything below is replayed from its transcript.</p>
