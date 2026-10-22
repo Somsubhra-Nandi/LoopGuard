@@ -106,11 +106,13 @@ Goal: `loopguard replay --since 30d` prints a correct report of loops in your pa
 - [x] D6 budget detector: soft → notify, hard → halt at the next tool call
 - [x] `loopguard report [session]`: timeline of a session: calls, loops, interventions, tokens, cost, wasted time; estimated cost per command family and tool
 - [x] Cost in `replay`; tokens and cost in `status`; pricing, unknown models, and budgets in `doctor`; `loopguard stop` survives a daemon restart
-- [ ] Dashboard (go:embed + htmx, no build step):
-  - [ ] overview: today / 7d / 30d: tokens, API-equivalent cost, loops caught, time saved estimate
-  - [ ] sessions list → session detail timeline (calls colored by progress, loop spans highlighted)
-  - [ ] settings view (read-only display of the effective config)
-- [ ] `loopguard dashboard` opens the browser with a one-time login link
+- [x] Dashboard (go:embed, server-rendered HTML and SVG, no scripts and no build step; LLD §9.4):
+  - [x] overview: today / 7d / 30d: tokens, API-equivalent cost, loops caught, interventions, recovery rate, time and cost inside loops; 30-day cost chart; budget status
+  - [x] sessions list → session detail timeline (failed calls marked, loop spans highlighted), top costs
+  - [x] settings view (read-only display of the effective config); pause/resume/stop with a confirm step
+- [x] `loopguard dashboard` opens the browser with a one-time login link
+- [x] Budgets off by default; `loopguard budget show|set|clear`; `id_verified` in pricing.yaml
+
 
 **Done when:** cost numbers match your provider console within ~5% for API-key sessions, and the dashboard is screenshot-worthy.
 

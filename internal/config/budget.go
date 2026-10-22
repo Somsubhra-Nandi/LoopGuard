@@ -1,6 +1,12 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+	"slices"
+	"strconv"
+	"strings"
+)
 
 // Budget scopes (LLD §6 D6): one session (with its subagents), all
 // sessions of the local day, and one repo's sessions of the local day.
@@ -117,16 +123,51 @@ func (b Budgets) Any() bool {
 	return false
 }
 
-// DefaultBudgets returns the default limits: everything off except a soft
-// warning when the day's API-equivalent cost passes $20.
-func DefaultBudgets() Budgets {
-	return Budgets{Daily: ScopeBudget{CostUSD: Limit{Soft: 20}}}
-}
+// DefaultBudgets returns the default limits: all off. Even a soft daily
+// warning would fire every day for heavy users, and for subscription users
+// the cost is only API-equivalent; init and doctor suggest one instead.
+func DefaultBudgets() Budgets { return Budgets{} }
 
 // BudgetKey is a limit's name in config.yaml, e.g. "budgets.session.hard_usd".
 func BudgetKey(scope, metric, level string) string {
-	suffix := map[string]string{MetricCost: "usd", MetricTokens: "tokens", MetricWall: "wall_minutes", MetricToolCalls: "tool_calls"}[metric]
-	return "budgets." + scope + "." + level + "_" + suffix
+	return "budgets." + scope + "." + level + "_" + metricSuffix[metric]
+}
+
+var metricSuffix = map[string]string{MetricCost: "usd", MetricTokens: "tokens", MetricWall: "wall_minutes", MetricToolCalls: "tool_calls"}
+
+// ExampleBudget is the budget init and doctor suggest (budgets are all off
+// by default).
+const ExampleBudget = "loopguard budget set daily.soft_usd 20"
+
+// ParseBudgetKey reads a limit's name as `loopguard budget` takes it:
+// "daily.soft_usd", with or without the "budgets." prefix.
+func ParseBudgetKey(key string) (scope, metric, level string, err error) {
+	k := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(key)), "budgets.")
+	scope, rest, ok := strings.Cut(k, ".")
+	if ok && slices.Contains(Scopes, scope) {
+		level, suffix, _ := strings.Cut(rest, "_")
+		for m, s := range metricSuffix {
+			if s == suffix && (level == "soft" || level == "hard") {
+				return scope, m, level, nil
+			}
+		}
+	}
+	return "", "", "", fmt.Errorf("unknown budget %q: use <scope>.<soft|hard>_<usd|tokens|wall_minutes|tool_calls> with scope session, daily, or repo (e.g. daily.soft_usd)", key)
+}
+
+// ParseBudgetValue reads a limit for metric: a positive number; tokens and
+// tool calls are whole numbers.
+func ParseBudgetValue(metric, s string) (float64, error) {
+	v, err := strconv.ParseFloat(strings.TrimPrefix(strings.TrimSpace(s), "$"), 64)
+	switch {
+	case err != nil || math.IsNaN(v) || math.IsInf(v, 0):
+		return 0, fmt.Errorf("%q is not a number", s)
+	case v <= 0:
+		return 0, fmt.Errorf("%q: a budget must be above 0 (to turn one off: loopguard budget clear)", s)
+	case (metric == MetricTokens || metric == MetricToolCalls) && v != math.Trunc(v):
+		return 0, fmt.Errorf("%q: %s is a whole number", s, strings.ReplaceAll(metric, "_", " "))
+	}
+	return v, nil
 }
 
 // BudgetsFile is the budgets: section.

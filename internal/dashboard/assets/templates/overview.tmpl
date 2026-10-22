@@ -1,0 +1,87 @@
+{{define "content"}}
+{{- with .Data}}
+<h1>Overview</h1>
+<p class="sub">{{.AsOf}}</p>
+{{- if not .Summary.Database}}
+<p class="notice">LoopGuard has recorded nothing yet. Live totals start once the hooks run (loopguard init).</p>
+{{- end}}
+<section class="periods" aria-label="Totals">
+{{- range .Summary.Periods}}
+  <article class="card period">
+    <h2>{{if eq .Name "today"}}Today{{else if eq .Name "7d"}}Last 7 days{{else}}Last 30 days{{end}}</h2>
+    <p class="big">{{usd .CostUSD}}</p>
+    <p class="sub">API-equivalent cost · {{count .Tokens}} tokens</p>
+    <dl class="stats">
+      <dt>Sessions</dt><dd>{{.Sessions}}</dd>
+      <dt>Tool calls</dt><dd>{{.ToolCalls}}</dd>
+      <dt>Loops caught</dt><dd>{{.Loops}}</dd>
+      <dt>Interventions</dt><dd>{{.Interventions.Real}} real · {{.Interventions.Would}} would-have</dd>
+      <dt>Recovery rate</dt><dd>{{rate .RecoveryReal}} real · {{rate .RecoveryWH}} would-have</dd>
+      <dt>Time inside loops</dt><dd>{{dur .LoopSeconds}} <abbr title="estimate">est.</abbr></dd>
+      <dt>Cost inside loops</dt><dd>{{usd .LoopCostUSD}} <abbr title="estimate">est.</abbr></dd>
+    </dl>
+    {{- if .UnpricedTokens}}
+    <p class="sub warn">{{count .UnpricedTokens}} tokens not priced ({{join .UnknownModels ", "}}): cost unknown.</p>
+    {{- end}}
+  </article>
+{{- end}}
+</section>
+
+<section class="card">
+  <h2>Daily cost, last 30 days</h2>
+  {{- with .Chart}}
+  {{- if .Empty}}
+  <p class="sub">No usage recorded in the last 30 days.</p>
+  {{- else}}
+  <p class="sub">{{.Total}} API-equivalent, <span class="key-loop">{{.Loop}} inside loops</span> (est.)</p>
+  <svg class="chart" viewBox="0 0 {{.Width}} {{.Height}}" role="img" aria-label="Daily API-equivalent cost over the last 30 days; the part inside loops is highlighted">
+    <line class="grid" x1="{{.PlotLeft}}" x2="{{.PlotRight}}" y1="{{.GridTop}}" y2="{{.GridTop}}"/>
+    <line class="grid" x1="{{.PlotLeft}}" x2="{{.PlotRight}}" y1="{{.GridMid}}" y2="{{.GridMid}}"/>
+    <line class="axis" x1="{{.PlotLeft}}" x2="{{.PlotRight}}" y1="{{.Base}}" y2="{{.Base}}"/>
+    <text class="ylabel" x="50" y="{{.GridTop}}" dy="4">{{.MaxLabel}}</text>
+    <text class="ylabel" x="50" y="{{.GridMid}}" dy="4">{{.MidLabel}}</text>
+    <text class="ylabel" x="50" y="{{.Base}}" dy="4">$0</text>
+    {{- range .Bars}}
+    <g><title>{{.Title}}</title><rect class="bar" x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}"/>{{if ne .LoopH "0.0"}}<rect class="bar-loop" x="{{.X}}" y="{{.LoopY}}" width="{{.W}}" height="{{.LoopH}}"/>{{end}}</g>
+    {{- end}}
+    {{- range .Labels}}
+    <text class="xlabel" x="{{.X}}" y="{{$.Data.Chart.Height}}" dy="-8">{{.Text}}</text>
+    {{- end}}
+  </svg>
+  <details>
+    <summary>The numbers</summary>
+    <div class="scroll"><table>
+      <thead><tr><th>Day</th><th class="num">Tokens</th><th class="num">Cost</th><th class="num">Inside loops (est.)</th></tr></thead>
+      <tbody>
+      {{- range .Days}}
+      <tr><td>{{.Date.Format "Mon Jan 2"}}</td><td class="num">{{count .Tokens}}</td><td class="num">{{usd .CostUSD}}</td><td class="num">{{usd .LoopCostUSD}}</td></tr>
+      {{- end}}
+      </tbody>
+    </table></div>
+  </details>
+  {{- end}}
+  {{- end}}
+</section>
+
+<section class="card">
+  <h2>Budgets</h2>
+  {{- if .BudgetsSet}}
+  {{- if .Budgets}}
+  <div class="scroll"><table>
+    <thead><tr><th>Scope</th><th>Budget</th><th class="num">Used</th><th class="num">Soft</th><th class="num">Hard</th><th>Status</th></tr></thead>
+    <tbody>
+    {{- range .Budgets}}
+    <tr class="budget-{{.State}}"><td>{{.Scope}}</td><td>{{words .Metric}}</td><td class="num">{{.UsedText}}</td><td class="num">{{.SoftText}}</td><td class="num">{{.HardText}}</td>
+      <td><meter min="0" max="{{.MeterMax}}" value="{{.Used}}"></meter> {{if eq .State "hard"}}over the hard limit{{else if eq .State "soft"}}past the soft limit{{else}}ok{{end}}</td></tr>
+    {{- end}}
+    </tbody>
+  </table></div>
+  {{- else}}
+  <p class="sub">Only session budgets are set, and no session is active.</p>
+  {{- end}}
+  {{- else}}
+  <p class="sub">No budget set. Example: <code>{{.Example}}</code></p>
+  {{- end}}
+</section>
+{{- end}}
+{{end}}

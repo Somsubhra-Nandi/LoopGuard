@@ -62,6 +62,7 @@ func (r Usage) write(ctx context.Context, tx *sql.Tx) error {
 // UsageFilter selects usage rows; zero fields don't filter.
 type UsageFilter struct {
 	SessionID  string    // the agent's session id (all its streams)
+	SessionIDs []string  // any of these session ids (nil: no filter)
 	SessionKey string    // one stream
 	Since      time.Time // ts at or after
 	Until      time.Time // ts before
@@ -76,6 +77,16 @@ func (s *Store) UsageRows(ctx context.Context, f UsageFilter) ([]Usage, error) {
 	if f.SessionID != "" {
 		q += " AND session_id = ?"
 		args = append(args, f.SessionID)
+	}
+	switch {
+	case f.SessionIDs == nil:
+	case len(f.SessionIDs) == 0:
+		q += " AND 0"
+	default:
+		q += " AND session_id IN (" + strings.TrimSuffix(strings.Repeat("?,", len(f.SessionIDs)), ",") + ")"
+		for _, id := range f.SessionIDs {
+			args = append(args, id)
+		}
 	}
 	if f.SessionKey != "" {
 		q += " AND session_key = ?"
@@ -190,13 +201,15 @@ type LoopSpan struct {
 	LastSeq    uint64    `json:"last_seq"`
 	Start      time.Time `json:"start"`
 	End        time.Time `json:"end"`
+	// LastSeen is when the stream was last seen (its session row).
+	LastSeen time.Time `json:"last_seen"`
 }
 
 // LoopSpans returns the loops of the streams last seen at or after since
 // whose signals reached minSeverity: one per (stream, loop key), spanning
 // all the calls its signals named.
 func (s *Store) LoopSpans(ctx context.Context, since time.Time, minSeverity float64) ([]LoopSpan, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT g.session_key, g.loop_key, g.detector, MAX(g.severity), GROUP_CONCAT(COALESCE(g.evidence, ''), char(30))
+	rows, err := s.db.QueryContext(ctx, `SELECT g.session_key, g.loop_key, g.detector, MAX(g.severity), GROUP_CONCAT(COALESCE(g.evidence, ''), char(30)), MAX(s.last_seen_at)
 FROM signals g JOIN sessions s ON s.key = g.session_key
 WHERE s.last_seen_at >= ? GROUP BY g.session_key, g.loop_key, g.detector ORDER BY g.session_key, MIN(g.id)`, ms(since))
 	if err != nil {
@@ -207,10 +220,12 @@ WHERE s.last_seen_at >= ? GROUP BY g.session_key, g.loop_key, g.detector ORDER B
 		var sp LoopSpan
 		var sev float64
 		var evs string
-		if err := rows.Scan(&sp.SessionKey, &sp.LoopKey, &sp.Detector, &sev, &evs); err != nil {
+		var seen int64
+		if err := rows.Scan(&sp.SessionKey, &sp.LoopKey, &sp.Detector, &sev, &evs, &seen); err != nil {
 			rows.Close()
 			return nil, err
 		}
+		sp.LastSeen = fromMS(seen)
 		if sev < minSeverity {
 			continue
 		}

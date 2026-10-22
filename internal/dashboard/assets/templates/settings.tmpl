@@ -1,0 +1,91 @@
+{{define "content"}}
+{{- with .Data}}
+<h1>Settings</h1>
+<p class="sub">Read-only: change them with loopguard mode, pause, budget, and notify, or in {{.Config.Path}}.{{if .ConfigErr}} <span class="warn">That file is invalid, so the defaults apply: {{.ConfigErr}}</span>{{end}}</p>
+
+<section class="card">
+  <h2>Level</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Where</th><th>Level</th><th>Why</th><th></th></tr></thead>
+    <tbody>
+    {{- range .Repos}}
+    <tr><td title="{{.Repo}}">{{.Name}}{{if .File}}<br><span class="sub">{{.File}}</span>{{end}}{{range .Notes}}<br><span class="sub warn">{{.}}</span>{{end}}</td>
+      <td>{{template "level" .Mode}}</td><td>{{.Why}}</td><td>{{template "buttons" .Buttons}}</td></tr>
+    {{- end}}
+    <tr><td>{{.Global.Name}}</td><td>{{template "level" .Global.Mode}}</td><td>{{.Global.Why}}</td><td></td></tr>
+    </tbody>
+  </table></div>
+  {{- if .Pauses}}
+  <p>Pauses in effect:</p>
+  <ul>{{range .Pauses}}<li>{{.}}</li>{{end}}</ul>
+  {{- end}}
+  <p class="sub">Repos are those with a session in the last 30 days. A repo's .loopguard.yaml can raise its level, never lower it; a pause makes any level observe.</p>
+</section>
+
+<section class="card">
+  <h2>Detectors</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Detector</th><th>On</th><th>Thresholds</th></tr></thead>
+    <tbody>
+    {{- range .Detectors}}
+    <tr><td>{{.Name}}</td><td>{{if .Enabled}}on{{else}}off{{end}}</td><td>{{.Settings}}</td></tr>
+    {{- end}}
+    </tbody>
+  </table></div>
+  <h3>Policy and windows</h3>
+  <dl class="stats wide">
+  {{- range .Policy}}
+    <dt>{{.Key}}</dt><dd>{{if .Value}}{{.Value}}{{else}}-{{end}}</dd>
+  {{- end}}
+  </dl>
+</section>
+
+<section class="card">
+  <h2>Budgets</h2>
+  {{- if .Budgets}}
+  <dl class="stats wide">
+  {{- range .Budgets}}
+    <dt>{{.Key}}</dt><dd>{{.Value}}</dd>
+  {{- end}}
+  </dl>
+  <p class="sub">Soft: notify, and one note to the agent at assist and guard. Hard: stop the turn at guard. Costs are API-equivalent.</p>
+  {{- else}}
+  <p class="sub">No budget set. Example: <code>{{.Example}}</code></p>
+  {{- end}}
+</section>
+
+<section class="card">
+  <h2>Notifications</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Channel</th><th>On</th><th>Target</th><th>Events</th></tr></thead>
+    <tbody>
+    {{- range .Notify}}
+    <tr><td>{{.Name}}</td><td>{{if .Enabled}}on{{else}}off{{end}}</td><td>{{if .Target}}{{.Target}}{{else}}-{{end}}</td><td>{{.Events}}</td></tr>
+    {{- end}}
+    </tbody>
+  </table></div>
+  {{- if .NotifyNote}}<p class="sub">{{.NotifyNote}}</p>{{end}}
+</section>
+
+<section class="card">
+  <h2>Pricing</h2>
+  {{- with .Pricing}}
+  <dl class="stats wide">
+    <dt>File</dt><dd>{{.Path}}{{if not .Exists}} (not written yet: the shipped prices apply){{end}}</dd>
+    {{- if .Error}}<dt>Error</dt><dd class="warn">{{.Error}} (the shipped prices apply)</dd>{{end}}
+    <dt>Models</dt><dd>{{.Models}}, checked {{join .Checked ", "}}</dd>
+    {{- if .Unverified}}<dt>Unverified prices</dt><dd class="warn">{{join .Unverified ", "}} (cost shown as unknown)</dd>{{end}}
+    {{- if .IDAssumed}}<dt>Ids inferred</dt><dd>{{join .IDAssumed ", "}} (prices checked; the model id follows the naming pattern but wasn't seen in a transcript)</dd>{{end}}
+  </dl>
+  {{- end}}
+</section>
+
+<section class="card">
+  <h2>About</h2>
+  <dl class="stats wide">
+    <dt>Version</dt><dd>{{.Version}}</dd>
+    <dt>Home</dt><dd>{{.Home}}</dd>
+  </dl>
+</section>
+{{- end}}
+{{end}}

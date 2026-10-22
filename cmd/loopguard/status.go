@@ -17,6 +17,7 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
 	"github.com/Somsubhra-Nandi/loopguard/internal/daemon"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
+	"github.com/Somsubhra-Nandi/loopguard/internal/report"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
 
@@ -243,19 +244,7 @@ func shortSID(id string) string {
 }
 
 // shortDuration formats d as 45s, 12m, 3h05m, or 2d04h.
-func shortDuration(d time.Duration) string {
-	switch {
-	case d < 0:
-		return "0s"
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
-	}
-	return fmt.Sprintf("%dd%02dh", int(d.Hours())/24, int(d.Hours())%24)
-}
+func shortDuration(d time.Duration) string { return report.ShortDuration(d) }
 
 func firstLine(s string) string {
 	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
@@ -300,7 +289,7 @@ func todayFromStore(ctx context.Context, st *store.Store, dir string) todayUsage
 	}
 	pricing, _, _ := cost.LoadPricing(dir)
 	for _, u := range rows {
-		m := usageMessage(u)
+		m := report.UsageMessage(u)
 		t.Tokens += m.Usage.Total()
 		if usd, ok := pricing.Cost(m); ok {
 			t.CostUSD += usd

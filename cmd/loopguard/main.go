@@ -3,9 +3,9 @@
 // nudges, blocks, or halts the agent.
 //
 // Replay (offline detection), the hook, the daemon (levels observe, notify,
-// assist, guard), notifications, mode, pause, resume, stop, stats, and
-// report (usage, API-equivalent cost, budgets) work; see plan.md for what
-// comes next.
+// assist, guard), notifications, mode, pause, resume, stop, stats, report
+// (usage, API-equivalent cost), budget, and the local dashboard work; see
+// plan.md for what comes next.
 package main
 
 import (
@@ -105,6 +105,8 @@ func newRootCmd(hookExit *int) *cobra.Command {
 		newStopCmd(),
 		newNotifyCmd(),
 		newStatsCmd(),
+		newBudgetCmd(),
+		newDashboardCmd(),
 		newVersionCmd(),
 	)
 	return root

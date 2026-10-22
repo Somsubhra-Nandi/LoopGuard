@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Session aaaa1111 · LoopGuard</title>
+<link rel="stylesheet" href="/ui/static/style.css">
+<link rel="icon" href="/ui/static/icon.svg" type="image/svg+xml">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/ui/"><img src="/ui/static/icon.svg" alt="" width="22" height="22"> LoopGuard</a>
+  <nav aria-label="Pages">
+    <a href="/ui/">Overview</a>
+    <a href="/ui/sessions" aria-current="page">Sessions</a>
+    <a href="/ui/costs">Top costs</a>
+    <a href="/ui/settings">Settings</a>
+  </nav>
+  <form class="signout" method="post" action="/ui/logout"><input type="hidden" name="csrf" value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"><button type="submit" class="link">Sign out</button></form>
+</header>
+<main>
+
+<p class="crumbs"><a href="/ui/sessions">Sessions</a> / aaaa1111</p>
+<h1>shop <span class="id">aaaa1111-0000-4000-8000-000000000001</span> <span class="badge live">live</span></h1>
+
+<section class="card">
+  <div class="summary">
+    <dl class="stats wide">
+      <dt>Project</dt><dd>/work/shop</dd>
+      <dt>Started</dt><dd>2026-10-21 13:00 · 12m (last event 2026-10-21 13:12)</dd>
+      <dt>Level</dt><dd><span class="level level-guard">guard</span> mode: guard in config.yaml</dd>
+      <dt>Recorded live</dt><dd>tool calls 12, failures 5, loops 1, tokens 300.1k, cost $0.96</dd>
+    </dl>
+    
+<div class="actions">
+<form method="post" action="/ui/confirm">
+  <input type="hidden" name="csrf" value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">
+  <input type="hidden" name="action" value="pause-session">
+  <input type="hidden" name="target" value="aaaa1111-0000-4000-8000-000000000001">
+  <input type="hidden" name="back" value="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">
+  <select name="for" aria-label="How long">
+    <option value="30m">30 minutes</option>
+    <option value="2h" selected>2 hours</option>
+    <option value="1d">1 day</option>
+    <option value="">until resumed</option>
+  </select>
+  <button type="submit">Pause session</button>
+</form>
+<form method="post" action="/ui/confirm">
+  <input type="hidden" name="csrf" value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">
+  <input type="hidden" name="action" value="pause-repo">
+  <input type="hidden" name="target" value="/work/shop">
+  <input type="hidden" name="back" value="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">
+  <select name="for" aria-label="How long">
+    <option value="30m">30 minutes</option>
+    <option value="2h" selected>2 hours</option>
+    <option value="1d">1 day</option>
+    <option value="">until resumed</option>
+  </select>
+  <button type="submit">Pause repo</button>
+</form>
+<form method="post" action="/ui/confirm">
+  <input type="hidden" name="csrf" value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">
+  <input type="hidden" name="action" value="stop">
+  <input type="hidden" name="target" value="aaaa1111-0000-4000-8000-000000000001">
+  <input type="hidden" name="back" value="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">
+  <button type="submit" class="danger">Stop its turn</button>
+</form>
+</div>
+  </div>
+</section>
+<section class="periods">
+  <article class="card period">
+    <h2>Cost</h2>
+    <p class="big">$0.06</p>
+    <p class="sub">API-equivalent · 220.6k tokens (input 33, output 550, cache write 0, cache read 220.0k)</p>
+  </article>
+  <article class="card period">
+    <h2>Calls</h2>
+    <p class="big">11</p>
+    <p class="sub">5 failed, 2 turns</p>
+  </article>
+  <article class="card period loopcard">
+    <h2>Loops</h2>
+    <p class="big">1</p>
+    <p class="sub">2m and $0.05 inside loops (est.)</p>
+  </article>
+</section>
+<p class="sub">From the transcript, with what LoopGuard did live.</p>
+<section class="card">
+  <h2>Main session <span class="sub">11 tool calls (5 failed), 220.6k tokens, $0.06</span></h2>
+  <ol class="timeline">
+    <li class="turn">
+      <div class="turn-head"><strong>Turn 1</strong> <span class="sub">+0:00 · 10 calls, 5 failed · 200.5k tokens · $0.05</span></div>
+      <ol class="items">
+        <li class="loop">
+          <div><strong>Loop</strong> · repeated failure · `jest`</div>
+          <div class="sub">calls 1–9 (5 calls), +0:00 to +2:56, $0.05 (est.)</div>
+          <div>LoopGuard: real nudge at +3:53, real deny at +5:53 · outcome <strong>recovered</strong></div>
+        </li>
+        <li class="call failed in-loop">
+          <span class="calls">call 1</span>
+          <span class="label">bash: jest</span>
+          <span class="sub">×1, 1 failed</span>
+        </li>
+        <li class="call in-loop">
+          <span class="calls">call 2</span>
+          <span class="label">edit src/cart.js</span>
+          <span class="sub">×1</span>
+        </li>
+        <li class="call failed in-loop">
+          <span class="calls">call 3</span>
+          <span class="label">bash: jest</span>
+          <span class="sub">×1, 1 failed</span>
+        </li>
+        <li class="call in-loop">
+          <span class="calls">call 4</span>
+          <span class="label">edit src/cart.js</span>
+          <span class="sub">×1</span>
+        </li>
+        <li class="call failed in-loop">
+          <span class="calls">call 5</span>
+          <span class="label">bash: jest</span>
+          <span class="sub">×1, 1 failed</span>
+        </li>
+        <li class="call in-loop">
+          <span class="calls">call 6</span>
+          <span class="label">edit src/cart.js</span>
+          <span class="sub">×1</span>
+        </li>
+        <li class="call failed in-loop">
+          <span class="calls">call 7</span>
+          <span class="label">bash: jest</span>
+          <span class="sub">×1, 1 failed</span>
+        </li>
+        <li class="call in-loop">
+          <span class="calls">call 8</span>
+          <span class="label">edit src/cart.js</span>
+          <span class="sub">×1</span>
+        </li>
+        <li class="call failed in-loop">
+          <span class="calls">call 9</span>
+          <span class="label">bash: jest</span>
+          <span class="sub">×1, 1 failed</span>
+        </li>
+        <li class="call">
+          <span class="calls">call 10</span>
+          <span class="label">read logs/big.log</span>
+          <span class="sub">×1</span>
+        </li>
+      </ol>
+    </li>
+    <li class="turn">
+      <div class="turn-head"><strong>Turn 2</strong> <span class="sub">+3:45 · 1 calls, 0 failed · 20.1k tokens · $0.0050</span></div>
+      <ol class="items">
+        <li class="call">
+          <span class="calls">call 11</span>
+          <span class="label">bash: ls src</span>
+          <span class="sub">×1</span>
+        </li>
+      </ol>
+    </li>
+  </ol>
+</section>
+
+<section class="card">
+  <h2>Top 4 by estimated cost <abbr title="estimate">est.</abbr></h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Family or tool + target</th><th class="num">Runs</th><th class="num">Avg output</th><th class="num">Est. cost</th><th class="num">Est. share</th></tr></thead>
+    <tbody>
+    <tr><td>read logs/big.log</td><td class="num">1</td><td class="num">50.0k tok</td><td class="num">$0.01</td><td class="num">20.0%</td></tr>
+    <tr><td>bash: jest</td><td class="num">5</td><td class="num">78 tok</td><td class="num">$0.0055</td><td class="num">9.9%</td></tr>
+    <tr><td>edit src/cart.js</td><td class="num">4</td><td class="num">16 tok</td><td class="num">$0.0041</td><td class="num">7.4%</td></tr>
+    <tr><td>bash: ls src</td><td class="num">1</td><td class="num">4 tok</td><td class="num">$0.0010</td><td class="num">1.8%</td></tr>
+    </tbody>
+  </table></div>
+  <p class="sub">A call's estimate: its share of the output of the model call that issued it, plus its result (about 4 characters per token) carried as input by every later model call until the next compaction.</p>
+</section>
+<section class="card">
+  <h2>Largest outputs <abbr title="estimate">est.</abbr></h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Session</th><th class="num">Call</th><th>Family or tool + target</th><th class="num">Result</th><th class="num">Carried</th><th class="num">Est. cost</th><th class="num">Est. share</th></tr></thead>
+    <tbody>
+    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">10</td><td>read logs/big.log</td><td class="num">50.0k tok</td><td class="num">1×</td><td class="num">$0.01</td><td class="num">20.0%</td></tr>
+    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">1</td><td>bash: jest</td><td class="num">78 tok</td><td class="num">10×</td><td class="num">$0.0012</td><td class="num">2.1%</td></tr>
+    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">3</td><td>bash: jest</td><td class="num">78 tok</td><td class="num">8×</td><td class="num">$0.0011</td><td class="num">2.0%</td></tr>
+    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">5</td><td>bash: jest</td><td class="num">78 tok</td><td class="num">6×</td><td class="num">$0.0011</td><td class="num">2.0%</td></tr>
+    <tr><td><a href="/ui/sessions/aaaa1111-0000-4000-8000-000000000001">aaaa1111</a></td><td class="num">7</td><td>bash: jest</td><td class="num">78 tok</td><td class="num">4×</td><td class="num">$0.0011</td><td class="num">1.9%</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+</main>
+<footer>
+  <p>Costs are API-equivalent: token usage priced at API rates. On a subscription you don't pay per token. Figures marked est. are estimates.</p>
+  <p>LoopGuard test · 2026-10-21 15:00 UTC</p>
+</footer>
+</body>
+</html>

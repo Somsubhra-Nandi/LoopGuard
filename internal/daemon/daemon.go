@@ -24,9 +24,11 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/capture"
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
+	"github.com/Somsubhra-Nandi/loopguard/internal/dashboard"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
 	"github.com/Somsubhra-Nandi/loopguard/internal/notify"
 	"github.com/Somsubhra-Nandi/loopguard/internal/proc"
+	"github.com/Somsubhra-Nandi/loopguard/internal/replay"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
 
@@ -57,6 +59,10 @@ type Options struct {
 	// Senders replaces the notification senders (tests). nil: the real
 	// ones, except in a test binary, where nothing is sent.
 	Senders notify.Senders
+	// Transcripts is where the dashboard reads transcripts (session
+	// timelines, top costs); "": ~/.claude/projects, or nothing in a test
+	// binary (tests never read the real home).
+	Transcripts string
 	// Ready, if set, is called once the daemon is listening and daemon.json
 	// is written.
 	Ready func(home.DaemonInfo)
@@ -142,6 +148,9 @@ func Run(ctx context.Context, o Options) error {
 		log:      log,
 		started:  time.Now().UTC(),
 	}
+	d.home = o.Home
+	d.dash = dashboard.New(dashboard.Options{Store: st, Backend: dashBackend{d}, Transcripts: transcriptsDir(o.Transcripts),
+		Port: ln.Addr().(*net.TCPAddr).Port, Version: o.Version, Home: o.Home, Log: log})
 	d.mgr.notifier = notify.NewDispatcher(senders(o.Senders), log)
 	// pricing.yaml: the shipped table, written once so the user can edit it.
 	if _, err := cost.EnsurePricing(o.Home); err != nil {
@@ -220,6 +229,18 @@ func Run(ctx context.Context, o Options) error {
 		err = nil
 	}
 	return err
+}
+
+// transcriptsDir is the dashboard's transcripts directory.
+func transcriptsDir(dir string) string {
+	switch {
+	case dir != "":
+		return dir
+	case testing.Testing():
+		return filepath.Join(os.TempDir(), "loopguard-test-no-transcripts")
+	}
+	dir, _ = replay.DefaultPath()
+	return dir
 }
 
 // senders returns the notification senders: o's, else the real ones. A

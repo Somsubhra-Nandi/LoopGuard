@@ -1,0 +1,106 @@
+{{define "content"}}
+{{- with .Data}}
+<p class="crumbs"><a href="/ui/sessions">Sessions</a> / {{short .ID}}</p>
+<h1>{{if .Row.Name}}{{.Row.Name}}{{else if .Report}}{{.Report.Project}}{{else}}Session{{end}} <span class="id">{{.ID}}</span>{{if .Row.Active}} <span class="badge live">live</span>{{end}}</h1>
+
+<section class="card">
+  <div class="summary">
+    {{- if .Found}}
+    <dl class="stats wide">
+      <dt>Project</dt><dd>{{.Row.Project}}</dd>
+      <dt>Started</dt><dd>{{.Row.Started}} · {{.Row.Duration}} (last event {{.LastSeen}})</dd>
+      <dt>Level</dt><dd>{{template "level" .Row.Level}} {{.Row.LevelWhy}}{{if .Row.LevelNow}} (not active: the level its next event would get){{end}}</dd>
+      {{- if .Paused}}<dt>Session</dt><dd class="warn">{{.Paused}}</dd>{{end}}
+      {{- if .RepoPaused}}<dt>Repo</dt><dd class="warn">{{.RepoPaused}}</dd>{{end}}
+      <dt>Recorded live</dt><dd>tool calls {{.Row.ToolCalls}}, failures {{.Row.Failures}}, loops {{.Row.Loops}}, tokens {{count .Row.Tokens}}, cost {{usd .Row.CostUSD}}</dd>
+    </dl>
+    {{- else}}
+    <p class="sub">LoopGuard didn't watch this session live; everything below is replayed from its transcript.</p>
+    {{- end}}
+    {{template "buttons" .Buttons}}
+  </div>
+</section>
+
+{{- if .ReportError}}
+<p class="notice">{{.ReportError}}</p>
+{{- if .Other}}
+<section class="card">
+  <h2>What LoopGuard did</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>When</th><th>Action</th><th>Kind</th><th>Detector</th><th>Outcome</th><th>Reason</th></tr></thead>
+    <tbody>
+    {{- range .Other}}
+    <tr><td>{{.TS.Format "2006-01-02 15:04"}}</td><td>{{.Action}}</td><td>{{if eq .Mode "enforce"}}real{{else}}would{{end}}</td><td>{{.Detector}}</td><td>{{if .Outcome}}{{.Outcome}}{{else}}pending{{end}}</td><td>{{clip .Reason 120}}</td></tr>
+    {{- end}}
+    </tbody>
+  </table></div>
+</section>
+{{- end}}
+{{- end}}
+
+{{- with .Report}}
+<section class="periods">
+  <article class="card period">
+    <h2>Cost</h2>
+    <p class="big">{{usd .Totals.CostUSD}}</p>
+    <p class="sub">API-equivalent · {{count .Totals.Tokens}} tokens (input {{count .Totals.Usage.Input}}, output {{count .Totals.Usage.Output}}, cache write {{count .Totals.Usage.CacheWrite}}, cache read {{count .Totals.Usage.CacheRead}})</p>
+    {{- if .Totals.UnpricedTokens}}<p class="sub warn">{{count .Totals.UnpricedTokens}} tokens not priced ({{join .Totals.UnknownModels ", "}}).</p>{{end}}
+  </article>
+  <article class="card period">
+    <h2>Calls</h2>
+    <p class="big">{{.Totals.Calls}}</p>
+    <p class="sub">{{.Totals.Failures}} failed, {{.Totals.Turns}} turns</p>
+  </article>
+  <article class="card period{{if .Totals.Loops}} loopcard{{end}}">
+    <h2>Loops</h2>
+    <p class="big">{{.Totals.Loops}}</p>
+    <p class="sub">{{dur .Totals.LoopSeconds}} and {{usd .Totals.LoopCostUSD}} inside loops (est.)</p>
+  </article>
+</section>
+<p class="sub">{{if .Live}}From the transcript, with what LoopGuard did live.{{else}}Replayed from the transcript: LoopGuard's actions are what it would have done.{{end}}</p>
+{{- end}}
+
+{{- range .Streams}}
+<section class="card">
+  <h2>{{.Name}} <span class="sub">{{.Calls}} tool calls ({{.Failures}} failed), {{count .Tokens}} tokens, {{usd .CostUSD}}</span></h2>
+  <ol class="timeline">
+  {{- range .Turns}}
+    <li class="turn">
+      <div class="turn-head"><strong>{{.Head}}</strong> <span class="sub">+{{offset .StartSeconds}} · {{.Calls}} calls, {{.Failures}} failed · {{count .Tokens}} tokens · {{usd .CostUSD}}{{if .UnpricedTokens}} (+{{count .UnpricedTokens}} not priced){{end}}</span></div>
+      <ol class="items">
+      {{- range $it := .Items}}
+      {{- with .Loop}}
+        <li class="loop">
+          <div><strong>Loop</strong> · {{words .Detector}} · {{.Subject}}</div>
+          <div class="sub">calls {{.FirstCall}}–{{.LastCall}} ({{.Count}} calls), +{{offset .StartSeconds}} to +{{offset .EndSeconds}}{{with .CostUSD}}, {{usd .}} (est.){{end}}</div>
+          <div>LoopGuard: {{if .Actions}}{{range $i, $a := .Actions}}{{if $i}}, {{end}}{{if eq $a.Kind "replay"}}would {{$a.Action}} at call {{$a.Call}}{{else}}{{$a.Kind}} {{$a.Action}} at +{{offset $a.AtSecond}}{{end}}{{end}}{{else}}nothing (cooldown or per-turn nudge limit){{end}} · outcome <strong>{{.Outcome}}</strong></div>
+        </li>
+      {{- end}}
+      {{- with .Group}}
+        <li class="call{{if .Failed}} failed{{end}}{{if $it.InLoop}} in-loop{{end}}">
+          <span class="calls">{{if eq .From .To}}call {{.From}}{{else}}calls {{.From}}–{{.To}}{{end}}</span>
+          <span class="label">{{clip .Label 80}}</span>
+          <span class="sub">×{{.Count}}{{if .Failed}}, {{.Failed}} failed{{end}}</span>
+        </li>
+      {{- end}}
+      {{- end}}
+      </ol>
+    </li>
+  {{- end}}
+  </ol>
+  {{- if .Other}}
+  <h3>Other actions</h3>
+  <ul>
+  {{- range .Other}}
+    <li>{{.Kind}} {{.Action}} ({{.Detector}}) at +{{offset .AtSecond}}, outcome {{.Outcome}}: {{.Reason}}</li>
+  {{- end}}
+  </ul>
+  {{- end}}
+</section>
+{{- end}}
+
+{{- with .Report}}
+{{template "estimates" .Estimates}}
+{{- end}}
+{{- end}}
+{{end}}

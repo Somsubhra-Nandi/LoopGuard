@@ -1,0 +1,13 @@
+{
+  "agent": "claude-code",
+  "session_id": "f9c69d47-a0fb-434f-848c-d6f16f954bf9",
+  "phase": "pre",
+  "tool_name": "read",
+  "tool_use_id": "toolu_015o2hfvK8AonGUyL8WPcGpU",
+  "input": {
+    "file_path": "\u003cstr:35\u003e"
+  },
+  "cwd": "\u003cHOME\u003e\\Desktop\\project",
+  "transcript": "\u003cHOME\u003e\\.claude\\projects\\\u003cHOME\u003e-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9.jsonl",
+  "perm_mode": "auto"
+}

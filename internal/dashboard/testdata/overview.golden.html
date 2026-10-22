@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Overview · LoopGuard</title>
+<link rel="stylesheet" href="/ui/static/style.css">
+<link rel="icon" href="/ui/static/icon.svg" type="image/svg+xml">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/ui/"><img src="/ui/static/icon.svg" alt="" width="22" height="22"> LoopGuard</a>
+  <nav aria-label="Pages">
+    <a href="/ui/" aria-current="page">Overview</a>
+    <a href="/ui/sessions">Sessions</a>
+    <a href="/ui/costs">Top costs</a>
+    <a href="/ui/settings">Settings</a>
+  </nav>
+  <form class="signout" method="post" action="/ui/logout"><input type="hidden" name="csrf" value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"><button type="submit" class="link">Sign out</button></form>
+</header>
+<main>
+
+<h1>Overview</h1>
+<p class="sub">Updated 0s ago</p>
+<section class="periods" aria-label="Totals">
+  <article class="card period">
+    <h2>Today</h2>
+    <p class="big">$0.96</p>
+    <p class="sub">API-equivalent cost · 300.1k tokens</p>
+    <dl class="stats">
+      <dt>Sessions</dt><dd>1</dd>
+      <dt>Tool calls</dt><dd>12</dd>
+      <dt>Loops caught</dt><dd>1</dd>
+      <dt>Interventions</dt><dd>2 real · 0 would-have</dd>
+      <dt>Recovery rate</dt><dd>50% real · - would-have</dd>
+      <dt>Time inside loops</dt><dd>5m <abbr title="estimate">est.</abbr></dd>
+      <dt>Cost inside loops</dt><dd>$0.48 <abbr title="estimate">est.</abbr></dd>
+    </dl>
+  </article>
+  <article class="card period">
+    <h2>Last 7 days</h2>
+    <p class="big">$2.77</p>
+    <p class="sub">API-equivalent cost · 996.4k tokens</p>
+    <dl class="stats">
+      <dt>Sessions</dt><dd>2</dd>
+      <dt>Tool calls</dt><dd>47</dd>
+      <dt>Loops caught</dt><dd>1</dd>
+      <dt>Interventions</dt><dd>2 real · 1 would-have</dd>
+      <dt>Recovery rate</dt><dd>50% real · 0% would-have</dd>
+      <dt>Time inside loops</dt><dd>5m <abbr title="estimate">est.</abbr></dd>
+      <dt>Cost inside loops</dt><dd>$0.48 <abbr title="estimate">est.</abbr></dd>
+    </dl>
+  </article>
+  <article class="card period">
+    <h2>Last 30 days</h2>
+    <p class="big">$2.77</p>
+    <p class="sub">API-equivalent cost · 1.04M tokens</p>
+    <dl class="stats">
+      <dt>Sessions</dt><dd>3</dd>
+      <dt>Tool calls</dt><dd>50</dd>
+      <dt>Loops caught</dt><dd>1</dd>
+      <dt>Interventions</dt><dd>2 real · 1 would-have</dd>
+      <dt>Recovery rate</dt><dd>50% real · 0% would-have</dd>
+      <dt>Time inside loops</dt><dd>5m <abbr title="estimate">est.</abbr></dd>
+      <dt>Cost inside loops</dt><dd>$0.48 <abbr title="estimate">est.</abbr></dd>
+    </dl>
+    <p class="sub warn">45.0k tokens not priced (mystery-model): cost unknown.</p>
+  </article>
+</section>
+
+<section class="card">
+  <h2>Daily cost, last 30 days</h2>
+  <p class="sub">$2.77 API-equivalent, <span class="key-loop">$0.48 inside loops</span> (est.)</p>
+  <svg class="chart" viewBox="0 0 720 220" role="img" aria-label="Daily API-equivalent cost over the last 30 days; the part inside loops is highlighted">
+    <line class="grid" x1="56.0" x2="712.0" y1="12.0" y2="12.0"/>
+    <line class="grid" x1="56.0" x2="712.0" y1="102.0" y2="102.0"/>
+    <line class="axis" x1="56.0" x2="712.0" y1="192.0" y2="192.0"/>
+    <text class="ylabel" x="50" y="12.0" dy="4">$2</text>
+    <text class="ylabel" x="50" y="102.0" dy="4">$1</text>
+    <text class="ylabel" x="50" y="192.0" dy="4">$0</text>
+    <g><title>Tue Sep 22: $0.00 API-equivalent</title><rect class="bar" x="59.1" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Wed Sep 23: $0.00 API-equivalent</title><rect class="bar" x="80.9" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Thu Sep 24: $0.00 API-equivalent</title><rect class="bar" x="102.8" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Fri Sep 25: $0.00 API-equivalent</title><rect class="bar" x="124.7" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Sat Sep 26: $0.00 API-equivalent</title><rect class="bar" x="146.5" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Sun Sep 27: $0.00 API-equivalent</title><rect class="bar" x="168.4" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Mon Sep 28: $0.00 API-equivalent</title><rect class="bar" x="190.3" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Tue Sep 29: $0.00 API-equivalent</title><rect class="bar" x="212.1" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Wed Sep 30: $0.00 API-equivalent</title><rect class="bar" x="234.0" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Thu Oct 1: $0.00 API-equivalent</title><rect class="bar" x="255.9" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Fri Oct 2: $0.00 API-equivalent</title><rect class="bar" x="277.7" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Sat Oct 3: $0.00 API-equivalent</title><rect class="bar" x="299.6" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Sun Oct 4: $0.00 API-equivalent</title><rect class="bar" x="321.5" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Mon Oct 5: $0.00 API-equivalent</title><rect class="bar" x="343.3" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Tue Oct 6: $0.00 API-equivalent</title><rect class="bar" x="365.2" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Wed Oct 7: $0.00 API-equivalent</title><rect class="bar" x="387.1" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Thu Oct 8: $0.00 API-equivalent</title><rect class="bar" x="408.9" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Fri Oct 9: $0.00 API-equivalent</title><rect class="bar" x="430.8" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Sat Oct 10: $0.00 API-equivalent</title><rect class="bar" x="452.7" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Sun Oct 11: $0.00 API-equivalent</title><rect class="bar" x="474.5" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Mon Oct 12: $0.00 API-equivalent</title><rect class="bar" x="496.4" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Tue Oct 13: $0.00 API-equivalent</title><rect class="bar" x="518.3" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Wed Oct 14: $0.00 API-equivalent</title><rect class="bar" x="540.1" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Thu Oct 15: $0.00 API-equivalent</title><rect class="bar" x="562.0" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Fri Oct 16: $0.00 API-equivalent</title><rect class="bar" x="583.9" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Sat Oct 17: $0.00 API-equivalent</title><rect class="bar" x="605.7" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Sun Oct 18: $1.81 API-equivalent</title><rect class="bar" x="627.6" y="29.4" width="15.7" height="162.6"/></g>
+    <g><title>Mon Oct 19: $0.00 API-equivalent</title><rect class="bar" x="649.5" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Tue Oct 20: $0.00 API-equivalent</title><rect class="bar" x="671.3" y="192.0" width="15.7" height="0.0"/></g>
+    <g><title>Wed Oct 21: $0.96 API-equivalent, $0.48 inside loops (est.)</title><rect class="bar" x="693.2" y="105.6" width="15.7" height="86.4"/><rect class="bar-loop" x="693.2" y="148.8" width="15.7" height="43.2"/></g>
+    <text class="xlabel" x="88.8" y="220" dy="-8">Sep 23</text>
+    <text class="xlabel" x="241.9" y="220" dy="-8">Sep 30</text>
+    <text class="xlabel" x="394.9" y="220" dy="-8">Oct 7</text>
+    <text class="xlabel" x="548.0" y="220" dy="-8">Oct 14</text>
+    <text class="xlabel" x="701.1" y="220" dy="-8">Oct 21</text>
+  </svg>
+  <details>
+    <summary>The numbers</summary>
+    <div class="scroll"><table>
+      <thead><tr><th>Day</th><th class="num">Tokens</th><th class="num">Cost</th><th class="num">Inside loops (est.)</th></tr></thead>
+      <tbody>
+      <tr><td>Tue Sep 22</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Wed Sep 23</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Thu Sep 24</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Fri Sep 25</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Sat Sep 26</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Sun Sep 27</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Mon Sep 28</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Tue Sep 29</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Wed Sep 30</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Thu Oct 1</td><td class="num">45.0k</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Fri Oct 2</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Sat Oct 3</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Sun Oct 4</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Mon Oct 5</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Tue Oct 6</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Wed Oct 7</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Thu Oct 8</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Fri Oct 9</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Sat Oct 10</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Sun Oct 11</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Mon Oct 12</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Tue Oct 13</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Wed Oct 14</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Thu Oct 15</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Fri Oct 16</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Sat Oct 17</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Sun Oct 18</td><td class="num">696.2k</td><td class="num">$1.81</td><td class="num">$0.00</td></tr>
+      <tr><td>Mon Oct 19</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Tue Oct 20</td><td class="num">0</td><td class="num">$0.00</td><td class="num">$0.00</td></tr>
+      <tr><td>Wed Oct 21</td><td class="num">300.1k</td><td class="num">$0.96</td><td class="num">$0.48</td></tr>
+      </tbody>
+    </table></div>
+  </details>
+</section>
+
+<section class="card">
+  <h2>Budgets</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Scope</th><th>Budget</th><th class="num">Used</th><th class="num">Soft</th><th class="num">Hard</th><th>Status</th></tr></thead>
+    <tbody>
+    <tr class="budget-soft"><td>today</td><td>cost usd</td><td class="num">$23.50</td><td class="num">$20.00</td><td class="num">$50.00</td>
+      <td><meter min="0" max="50" value="23.5"></meter> past the soft limit</td></tr>
+    <tr class="budget-ok"><td>session aaaa1111</td><td>tool calls</td><td class="num">12</td><td class="num">-</td><td class="num">400</td>
+      <td><meter min="0" max="400" value="12"></meter> ok</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+</main>
+<footer>
+  <p>Costs are API-equivalent: token usage priced at API rates. On a subscription you don't pay per token. Figures marked est. are estimates.</p>
+  <p>LoopGuard test · 2026-10-21 15:00 UTC</p>
+</footer>
+</body>
+</html>

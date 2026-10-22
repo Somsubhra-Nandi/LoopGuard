@@ -1,0 +1,23 @@
+{
+  "agent": "claude-code",
+  "session_id": "f9c69d47-a0fb-434f-848c-d6f16f954bf9",
+  "phase": "post",
+  "tool_name": "read",
+  "tool_use_id": "toolu_0123YYPgDgCdj5HxCG6z9jwD",
+  "input": {
+    "file_path": "\u003cstr:30\u003e"
+  },
+  "output": {
+    "file": {
+      "content": "\u003cstr:32\u003e",
+      "filePath": "\u003cstr:30\u003e",
+      "numLines": 3,
+      "startLine": 1,
+      "totalLines": 3
+    },
+    "type": "\u003cstr:4\u003e"
+  },
+  "cwd": "\u003cHOME\u003e\\Desktop\\project",
+  "transcript": "\u003cHOME\u003e\\.claude\\projects\\\u003cHOME\u003e-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9.jsonl",
+  "perm_mode": "auto"
+}

@@ -1,0 +1,32 @@
+{
+  "cwd": "<HOME>\\Desktop\\project",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolBatch",
+  "permission_mode": "auto",
+  "prompt_id": "2360e5ac-c081-486f-bb14-d5325ddbc930",
+  "scratchpad_dir": "<HOME>\\AppData\\Local\\Temp\\claude\\<HOME>-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9\\scratchpad",
+  "session_id": "f9c69d47-a0fb-434f-848c-d6f16f954bf9",
+  "tool_calls": [
+    {
+      "tool_input": {
+        "content": "<str:421>",
+        "file_path": "<str:116>"
+      },
+      "tool_name": "Write",
+      "tool_response": "<str:212>",
+      "tool_use_id": "toolu_01XR6KJ3eTE8xHxm4YHVtHWr"
+    },
+    {
+      "tool_input": {
+        "command": "<str:121>",
+        "description": "<str:34>"
+      },
+      "tool_name": "PowerShell",
+      "tool_response": "<str:491>",
+      "tool_use_id": "toolu_01Ej3wxPvGUPv2Qq2v9vgZkh"
+    }
+  ],
+  "transcript_path": "<HOME>\\.claude\\projects\\<HOME>-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9.jsonl"
+}

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{.Title}} · LoopGuard</title>
+<link rel="stylesheet" href="/ui/static/style.css">
+<link rel="icon" href="/ui/static/icon.svg" type="image/svg+xml">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/ui/"><img src="/ui/static/icon.svg" alt="" width="22" height="22"> LoopGuard</a>
+  {{- if .CSRF}}
+  <nav aria-label="Pages">
+    <a href="/ui/"{{if eq .Nav "overview"}} aria-current="page"{{end}}>Overview</a>
+    <a href="/ui/sessions"{{if eq .Nav "sessions"}} aria-current="page"{{end}}>Sessions</a>
+    <a href="/ui/costs"{{if eq .Nav "costs"}} aria-current="page"{{end}}>Top costs</a>
+    <a href="/ui/settings"{{if eq .Nav "settings"}} aria-current="page"{{end}}>Settings</a>
+  </nav>
+  <form class="signout" method="post" action="/ui/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit" class="link">Sign out</button></form>
+  {{- end}}
+</header>
+<main>
+{{- range .Notices}}
+<p class="notice">{{.}}</p>
+{{- end}}
+{{template "content" .}}
+</main>
+<footer>
+  <p>Costs are API-equivalent: token usage priced at API rates. On a subscription you don't pay per token. Figures marked est. are estimates.</p>
+  <p>LoopGuard {{.Version}} · {{.Now.Format "2006-01-02 15:04 MST"}}</p>
+</footer>
+</body>
+</html>
+{{- define "buttons"}}
+{{- if .List}}
+<div class="actions">
+{{- range .List}}
+<form method="post" action="/ui/confirm">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <input type="hidden" name="action" value="{{.Action}}">
+  <input type="hidden" name="target" value="{{.Target}}">
+  <input type="hidden" name="back" value="{{.Back}}">
+  {{- if .Pause}}
+  <select name="for" aria-label="How long">
+    <option value="30m">30 minutes</option>
+    <option value="2h" selected>2 hours</option>
+    <option value="1d">1 day</option>
+    <option value="">until resumed</option>
+  </select>
+  {{- end}}
+  <button type="submit"{{if .Danger}} class="danger"{{end}}>{{.Label}}</button>
+</form>
+{{- end}}
+</div>
+{{- end}}
+{{- end}}
+{{- define "level"}}<span class="level level-{{.}}">{{.}}</span>{{end}}
+{{- define "estimates"}}
+<section class="card">
+  <h2>Top {{len .Top}} by estimated cost <abbr title="estimate">est.</abbr></h2>
+  {{- if .Top}}
+  <div class="scroll"><table>
+    <thead><tr><th>Family or tool + target</th><th class="num">Runs</th><th class="num">Avg output</th><th class="num">Est. cost</th><th class="num">Est. share</th></tr></thead>
+    <tbody>
+    {{- range .Top}}
+    <tr><td>{{clip .Group 80}}</td><td class="num">{{.Runs}}</td><td class="num">{{tokensf .AvgResultTokens}} tok</td><td class="num">{{usd .EstUSD}}</td><td class="num">{{share .EstShare}}</td></tr>
+    {{- end}}
+    </tbody>
+  </table></div>
+  {{- else}}
+  <p class="sub">No tool calls.</p>
+  {{- end}}
+  <p class="sub">A call's estimate: its share of the output of the model call that issued it, plus its result (about 4 characters per token) carried as input by every later model call until the next compaction.</p>
+</section>
+{{- if .Largest}}
+<section class="card">
+  <h2>Largest outputs <abbr title="estimate">est.</abbr></h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Session</th><th class="num">Call</th><th>Family or tool + target</th><th class="num">Result</th><th class="num">Carried</th><th class="num">Est. cost</th><th class="num">Est. share</th></tr></thead>
+    <tbody>
+    {{- range .Largest}}
+    <tr><td><a href="/ui/sessions/{{.SessionID}}">{{short .SessionID}}</a>{{if .AgentID}}/{{clip .AgentID 12}}{{end}}</td><td class="num">{{.Call}}</td><td>{{clip .Group 60}}</td><td class="num">{{count .ResultTokens}} tok</td><td class="num">{{.LaterCalls}}×</td><td class="num">{{usd .EstUSD}}</td><td class="num">{{share .EstShare}}</td></tr>
+    {{- end}}
+    </tbody>
+  </table></div>
+</section>
+{{- end}}
+{{- end}}

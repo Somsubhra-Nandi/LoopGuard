@@ -6,126 +6,14 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"sort"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
-	"github.com/Somsubhra-Nandi/loopguard/internal/policy"
+	"github.com/Somsubhra-Nandi/loopguard/internal/report"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
-
-// statsReport is `loopguard stats --json`.
-type statsReport struct {
-	Since     time.Time       `json:"since,omitzero"`
-	Total     int64           `json:"total"`
-	ByKind    []kindStats     `json:"by_kind"`
-	Detectors []detectorStats `json:"detectors"`
-}
-
-// kindStats counts one action, real (it reached the agent) and would-have.
-type kindStats struct {
-	Action    string `json:"action"`
-	Real      int64  `json:"real"`
-	WouldHave int64  `json:"would_have"`
-}
-
-// detectorStats is one detector's interventions and outcomes. Recovery
-// rates are recovered / (recovered + moved_on + continued_loop + halted),
-// apart for real and would-have interventions: outcomes still pending or
-// unknown don't count, and moved_on (the loop went quiet without the
-// command recovering) counts against.
-type detectorStats struct {
-	Detector     string           `json:"detector"`
-	Actions      map[string]int64 `json:"actions"`
-	Real         outcomeCounts    `json:"real"`
-	WouldHave    outcomeCounts    `json:"would_have"`
-	RecoveryReal *float64         `json:"recovery_rate_real,omitempty"`
-	RecoveryWH   *float64         `json:"recovery_rate_would_have,omitempty"`
-}
-
-type outcomeCounts struct {
-	Recovered int64 `json:"recovered"`
-	MovedOn   int64 `json:"moved_on"`
-	Continued int64 `json:"continued_loop"`
-	Halted    int64 `json:"halted"`
-	Unknown   int64 `json:"unknown"`
-	Pending   int64 `json:"pending"`
-	NA        int64 `json:"not_applicable,omitempty"` // self-protection: no loop to recover from
-}
-
-func (o *outcomeCounts) add(outcome string, n int64) {
-	switch outcome {
-	case policy.OutcomeRecovered:
-		o.Recovered += n
-	case policy.OutcomeMovedOn:
-		o.MovedOn += n
-	case policy.OutcomeContinued:
-		o.Continued += n
-	case policy.OutcomeNA:
-		o.NA += n
-	case policy.OutcomeHalted:
-		o.Halted += n
-	case policy.OutcomeUnknown:
-		o.Unknown += n
-	default:
-		o.Pending += n
-	}
-}
-
-func (o outcomeCounts) rate() *float64 {
-	decided := o.Recovered + o.MovedOn + o.Continued + o.Halted
-	if decided == 0 {
-		return nil
-	}
-	r := float64(o.Recovered) / float64(decided)
-	return &r
-}
-
-func buildStats(rows []store.InterventionCount, since time.Time) statsReport {
-	r := statsReport{Since: since, ByKind: []kindStats{}, Detectors: []detectorStats{}}
-	kinds := map[string]*kindStats{}
-	dets := map[string]*detectorStats{}
-	for _, c := range rows {
-		r.Total += c.Count
-		k := kinds[c.Action]
-		if k == nil {
-			k = &kindStats{Action: c.Action}
-			kinds[c.Action] = k
-		}
-		name := c.Detector
-		if name == "" {
-			name = "?"
-		}
-		d := dets[name]
-		if d == nil {
-			d = &detectorStats{Detector: name, Actions: map[string]int64{}}
-			dets[name] = d
-		}
-		d.Actions[c.Action] += c.Count
-		if c.Mode == store.ModeEnforce {
-			k.Real += c.Count
-			d.Real.add(c.Outcome, c.Count)
-		} else {
-			k.WouldHave += c.Count
-			d.WouldHave.add(c.Outcome, c.Count)
-		}
-	}
-	for _, a := range []string{"nudge", "deny", "halt"} {
-		if k := kinds[a]; k != nil {
-			r.ByKind = append(r.ByKind, *k)
-		} else {
-			r.ByKind = append(r.ByKind, kindStats{Action: a})
-		}
-	}
-	for _, d := range dets {
-		d.RecoveryReal, d.RecoveryWH = d.Real.rate(), d.WouldHave.rate()
-		r.Detectors = append(r.Detectors, *d)
-	}
-	sort.Slice(r.Detectors, func(i, j int) bool { return r.Detectors[i].Detector < r.Detectors[j].Detector })
-	return r
-}
 
 func newStatsCmd() *cobra.Command {
 	var since string
@@ -163,7 +51,7 @@ recovery rate is recovered / (recovered + moved_on + continued_loop + halted).`,
 					return err
 				}
 			}
-			r := buildStats(rows, from)
+			r := report.BuildStats(rows, from)
 			if asJSON {
 				enc := json.NewEncoder(out)
 				enc.SetIndent("", "  ")
@@ -178,7 +66,7 @@ recovery rate is recovered / (recovered + moved_on + continued_loop + halted).`,
 	return cmd
 }
 
-func printStats(out io.Writer, r statsReport, since string) {
+func printStats(out io.Writer, r report.Stats, since string) {
 	window := "all time"
 	if !r.Since.IsZero() {
 		window = "last " + since
@@ -200,7 +88,7 @@ func printStats(out io.Writer, r statsReport, since string) {
 	}
 }
 
-func outcomeText(o outcomeCounts, rate *float64) string {
+func outcomeText(o report.OutcomeCounts, rate *float64) string {
 	s := fmt.Sprintf("%d/%d/%d/%d/%d", o.Recovered, o.MovedOn, o.Continued, o.Halted, o.Unknown)
 	if rate != nil {
 		s += fmt.Sprintf(" (%.0f%%)", *rate*100)

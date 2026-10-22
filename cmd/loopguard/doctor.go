@@ -25,12 +25,13 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/daemon"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
 	"github.com/Somsubhra-Nandi/loopguard/internal/notify"
+	"github.com/Somsubhra-Nandi/loopguard/internal/report"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
 
 // doctorSession is the session id of doctor's synthetic events; status
-// leaves it out.
-const doctorSession = "loopguard-doctor"
+// and the totals leave it out.
+const doctorSession = report.DoctorSession
 
 // roundTripLimit is how long the synthetic event may take end to end.
 const roundTripLimit = time.Second
@@ -404,33 +405,24 @@ func costChecks(dir, dbPath string) []adapter.Check {
 	add := func(name string, st adapter.Status, detail, fix string) {
 		checks = append(checks, adapter.Check{Name: name, Status: st, Detail: detail, Fix: fix})
 	}
-	path := filepath.Join(dir, cost.PricingFile)
-	pricing, exists, err := cost.LoadPricing(dir)
+	pricing, ps := cost.Status(dir)
+	path := ps.Path
 	switch {
-	case err != nil:
-		add("pricing", adapter.StatusWarn, path+" is invalid, so the shipped prices are used: "+err.Error(),
+	case ps.Error != "":
+		add("pricing", adapter.StatusWarn, path+" is invalid, so the shipped prices are used: "+ps.Error,
 			"fix the file, or move it aside (the daemon writes a fresh one at start)")
-	case !exists:
+	case !ps.Exists:
 		add("pricing", adapter.StatusWarn, "no "+path+"; the shipped prices are used",
 			"restart the daemon (loopguard daemon stop; the next hook starts it), which writes it")
+	case len(ps.Unverified) > 0:
+		add("pricing", adapter.StatusWarn, "unverified prices (their cost shows as unknown): "+strings.Join(ps.Unverified, ", "),
+			"fill them in from the provider's pricing page in "+path+" and set checked: <date>")
 	default:
-		if u := pricing.Unverified(); len(u) > 0 {
-			names := make([]string, len(u))
-			for i, m := range u {
-				names[i] = m.Match
-			}
-			add("pricing", adapter.StatusWarn, "unverified prices (their cost shows as unknown): "+strings.Join(names, ", "),
-				"fill them in from the provider's pricing page in "+path+" and set checked: <date>")
-		} else {
-			checked := map[string]bool{}
-			for _, m := range pricing.Models {
-				checked[m.Checked] = true
-			}
-			add("pricing", adapter.StatusOK, fmt.Sprintf("%d model prices, checked %s (%s); costs are API-equivalent",
-				len(pricing.Models), strings.Join(sortedKeys(checked), ", "), path), "")
-		}
+		add("pricing", adapter.StatusOK, fmt.Sprintf("%d model prices, checked %s (%s); costs are API-equivalent",
+			ps.Models, strings.Join(ps.Checked, ", "), path), "")
 	}
 
+	seen := map[string]bool{} // models with usage in the last 30 days
 	if fileExists(dbPath) {
 		if st, err := store.Open(dbPath); err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -440,13 +432,16 @@ func costChecks(dir, dbPath string) []adapter.Check {
 			if err == nil {
 				unknown := map[string]int64{}
 				for _, u := range rows {
+					if mp, ok := pricing.Lookup(u.Model); ok {
+						seen[mp.Match] = true
+					}
 					if u.Model != cost.SyntheticModel && !pricing.Priced(u.Model) {
-						unknown[u.Model] += usageMessage(u).Usage.Total()
+						unknown[u.Model] += report.UsageMessage(u).Usage.Total()
 					}
 				}
 				if len(unknown) > 0 {
 					var parts []string
-					for _, m := range sortedKeys(boolKeys(unknown)) {
+					for _, m := range report.SortedKeys(boolKeys(unknown)) {
 						parts = append(parts, fmt.Sprintf("%s (%s tokens)", m, compactCount(unknown[m])))
 					}
 					add("unknown models", adapter.StatusWarn, "seen in the last 30 days without a price, cost unknown: "+strings.Join(parts, ", "),
@@ -456,8 +451,31 @@ func costChecks(dir, dbPath string) []adapter.Check {
 		}
 	}
 
+	if len(ps.IDAssumed) > 0 {
+		var confirmed, assumed []string
+		for _, m := range ps.IDAssumed {
+			if seen[m] {
+				confirmed = append(confirmed, m)
+			} else {
+				assumed = append(assumed, m)
+			}
+		}
+		detail := "prices checked, model ids inferred (id_verified: false; a wrong id shows under unknown models)"
+		if len(assumed) > 0 {
+			detail += ": " + strings.Join(assumed, ", ")
+		}
+		if len(confirmed) > 0 {
+			detail += "; seen in the last 30 days, so set id_verified: true for: " + strings.Join(confirmed, ", ")
+		}
+		add("model ids", adapter.StatusOK, detail, "")
+	}
+
 	b := config.NewLoader(dir, config.LoaderOptions{}).For("").Budgets
-	add("budgets", adapter.StatusOK, describeBudgets(b)+" (soft: notify and one note to the agent; hard: stop the turn at the guard level)", "")
+	if b.Any() {
+		add("budgets", adapter.StatusOK, describeBudgets(b)+" (soft: notify and one note to the agent; hard: stop the turn at the guard level)", "")
+	} else {
+		add("budgets", adapter.StatusOK, "No budget set. Example: "+config.ExampleBudget, "")
+	}
 	return checks
 }
 

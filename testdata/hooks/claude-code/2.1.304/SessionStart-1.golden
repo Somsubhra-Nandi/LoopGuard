@@ -1,0 +1,9 @@
+{
+  "agent": "claude-code",
+  "session_id": "f9c69d47-a0fb-434f-848c-d6f16f954bf9",
+  "phase": "session_start",
+  "cwd": "\u003cHOME\u003e\\Desktop\\project",
+  "transcript": "\u003cHOME\u003e\\.claude\\projects\\\u003cHOME\u003e-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9.jsonl",
+  "model": "claude-opus-5-5",
+  "source": "startup"
+}

@@ -7,8 +7,30 @@ import (
 
 func TestBudgets(t *testing.T) {
 	d := Defaults().Budgets
-	if d != DefaultBudgets() || d.Daily.CostUSD != (Limit{Soft: 20}) || d.Session.CostUSD.On() || d.Repo.ToolCalls.On() {
-		t.Errorf("defaults %+v: only a soft daily cost warning", d)
+	if d != DefaultBudgets() || d.Any() {
+		t.Errorf("defaults %+v: all off", d)
+	}
+	for key, want := range map[string]string{"daily.soft_usd": "budgets.daily.soft_usd", "budgets.session.hard_wall_minutes": "budgets.session.hard_wall_minutes",
+		"Repo.Hard_Tool_Calls": "budgets.repo.hard_tool_calls"} {
+		if s, m, l, err := ParseBudgetKey(key); err != nil || BudgetKey(s, m, l) != want {
+			t.Errorf("ParseBudgetKey(%q) = %s %s %s %v", key, s, m, l, err)
+		}
+	}
+	for _, key := range []string{"daily", "weekly.soft_usd", "daily.max_usd", "daily.soft_dollars", "daily.soft"} {
+		if _, _, _, err := ParseBudgetKey(key); err == nil {
+			t.Errorf("ParseBudgetKey(%q) accepted", key)
+		}
+	}
+	if v, err := ParseBudgetValue(MetricCost, "$12.5"); err != nil || v != 12.5 {
+		t.Errorf("12.5: %v %v", v, err)
+	}
+	for _, s := range []string{"0", "-1", "x", "NaN", "Inf"} {
+		if _, err := ParseBudgetValue(MetricCost, s); err == nil {
+			t.Errorf("value %q accepted", s)
+		}
+	}
+	if _, err := ParseBudgetValue(MetricToolCalls, "10.5"); err == nil {
+		t.Error("fractional tool calls accepted")
 	}
 	f := mustParse(t, `
 budgets:

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Session bbbb2222 · LoopGuard</title>
+<link rel="stylesheet" href="/ui/static/style.css">
+<link rel="icon" href="/ui/static/icon.svg" type="image/svg+xml">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/ui/"><img src="/ui/static/icon.svg" alt="" width="22" height="22"> LoopGuard</a>
+  <nav aria-label="Pages">
+    <a href="/ui/">Overview</a>
+    <a href="/ui/sessions" aria-current="page">Sessions</a>
+    <a href="/ui/costs">Top costs</a>
+    <a href="/ui/settings">Settings</a>
+  </nav>
+  <form class="signout" method="post" action="/ui/logout"><input type="hidden" name="csrf" value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"><button type="submit" class="link">Sign out</button></form>
+</header>
+<main>
+
+<p class="crumbs"><a href="/ui/sessions">Sessions</a> / bbbb2222</p>
+<h1>api <span class="id">bbbb2222-0000-4000-8000-000000000002</span></h1>
+
+<section class="card">
+  <div class="summary">
+    <dl class="stats wide">
+      <dt>Project</dt><dd>/work/api</dd>
+      <dt>Started</dt><dd>2026-10-18 15:00 · 30m (last event 2026-10-18 15:30)</dd>
+      <dt>Level</dt><dd><span class="level level-observe">observe</span> paused (not active: the level its next event would get)</dd><dt>Repo</dt><dd class="warn">paused until resumed</dd>
+      <dt>Recorded live</dt><dd>tool calls 35, failures 2, loops 0, tokens 696.2k, cost $1.81</dd>
+    </dl>
+    
+<div class="actions">
+<form method="post" action="/ui/confirm">
+  <input type="hidden" name="csrf" value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">
+  <input type="hidden" name="action" value="pause-session">
+  <input type="hidden" name="target" value="bbbb2222-0000-4000-8000-000000000002">
+  <input type="hidden" name="back" value="/ui/sessions/bbbb2222-0000-4000-8000-000000000002">
+  <select name="for" aria-label="How long">
+    <option value="30m">30 minutes</option>
+    <option value="2h" selected>2 hours</option>
+    <option value="1d">1 day</option>
+    <option value="">until resumed</option>
+  </select>
+  <button type="submit">Pause session</button>
+</form>
+<form method="post" action="/ui/confirm">
+  <input type="hidden" name="csrf" value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">
+  <input type="hidden" name="action" value="resume-repo">
+  <input type="hidden" name="target" value="/work/api">
+  <input type="hidden" name="back" value="/ui/sessions/bbbb2222-0000-4000-8000-000000000002">
+  <button type="submit">Resume repo</button>
+</form>
+</div>
+  </div>
+</section>
+<p class="notice">No transcript of this session under <TRANSCRIPTS>, so there is no timeline.</p>
+<section class="card">
+  <h2>What LoopGuard did</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>When</th><th>Action</th><th>Kind</th><th>Detector</th><th>Outcome</th><th>Reason</th></tr></thead>
+    <tbody>
+    <tr><td>2026-10-18 20:39</td><td>nudge</td><td>would</td><td>exact_repeat</td><td>moved_on</td><td>exact_repeat: the same call 3 times</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+</main>
+<footer>
+  <p>Costs are API-equivalent: token usage priced at API rates. On a subscription you don't pay per token. Figures marked est. are estimates.</p>
+  <p>LoopGuard test · 2026-10-21 15:00 UTC</p>
+</footer>
+</body>
+</html>

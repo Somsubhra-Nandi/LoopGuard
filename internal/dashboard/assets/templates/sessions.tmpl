@@ -1,0 +1,49 @@
+{{define "content"}}
+{{- with .Data}}
+<h1>Sessions</h1>
+{{- if .AsOf}}<p class="sub">{{.AsOf}}</p>{{end}}
+<form class="filters card" method="get" action="/ui/sessions">
+  <label>Project
+    <select name="project">
+      <option value="">all</option>
+      {{- range .Projects}}
+      <option value="{{.}}"{{if eq . $.Data.Project}} selected{{end}}>{{base .}}</option>
+      {{- end}}
+    </select>
+  </label>
+  <label>From <input type="date" name="from" value="{{.From}}"></label>
+  <label>To <input type="date" name="to" value="{{.To}}"></label>
+  <label>Sort by
+    <select name="sort">
+      <option value="date"{{if eq .Sort "date"}} selected{{end}}>date</option>
+      <option value="cost"{{if eq .Sort "cost"}} selected{{end}}>cost</option>
+      <option value="loops"{{if eq .Sort "loops"}} selected{{end}}>loops</option>
+    </select>
+  </label>
+  <button type="submit">Show</button>
+</form>
+{{- if .Rows}}
+<div class="scroll card flush"><table class="sessions">
+  <thead><tr><th>Project</th><th>Started</th><th class="num">Duration</th><th class="num">Tool calls</th><th class="num">Failures</th><th class="num">Loops</th><th class="num">Cost</th><th>Level</th></tr></thead>
+  <tbody>
+  {{- range .Rows}}
+  <tr{{if .Loops}} class="has-loops"{{end}}>
+    <td><a href="/ui/sessions/{{.SessionID}}" title="{{.Project}}">{{.Name}}</a> <span class="id">{{short .SessionID}}</span>{{if .Active}} <span class="badge live">live</span>{{end}}</td>
+    <td>{{.Started}}</td>
+    <td class="num">{{.Duration}}</td>
+    <td class="num">{{.ToolCalls}}</td>
+    <td class="num">{{.Failures}}</td>
+    <td class="num">{{.Loops}}</td>
+    <td class="num">{{usd .CostUSD}}{{if .UnpricedTokens}} <span class="warn" title="{{count .UnpricedTokens}} tokens not priced">+?</span>{{end}}</td>
+    <td title="{{.LevelWhy}}">{{template "level" .Level}}{{if .LevelNow}} <span class="muted">now</span>{{end}}</td>
+  </tr>
+  {{- end}}
+  </tbody>
+</table></div>
+{{- if .Truncated}}<p class="sub">Showing the 1000 most recent sessions; narrow the dates to see others.</p>{{end}}
+{{- else}}
+<p class="card sub">No sessions in this range.</p>
+{{- end}}
+<p class="sub">Level: what LoopGuard does in the session now (live), or for a session that isn't active, the level its next event would get ("now"). Costs are API-equivalent.</p>
+{{- end}}
+{{end}}

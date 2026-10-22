@@ -12,6 +12,7 @@ import (
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
+	"github.com/Somsubhra-Nandi/loopguard/internal/report"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
 
@@ -236,7 +237,7 @@ func TestStatsCommand(t *testing.T) {
 			t.Errorf("stats lacks %q:\n%s", want, out)
 		}
 	}
-	var r statsReport
+	var r report.Stats
 	if err := json.Unmarshal([]byte(cli(t, false, "stats", "--json", "--since", "7d")), &r); err != nil {
 		t.Fatal(err)
 	}

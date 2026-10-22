@@ -1,0 +1,9 @@
+{{define "content"}}
+{{- with .Data}}
+<section class="card narrow{{if .OK}} ok{{end}}">
+  <h1>{{.Title}}</h1>
+  <p>{{.Text}}</p>
+  {{- if .Back}}<p><a href="{{.Back}}">Back</a></p>{{end}}
+</section>
+{{- end}}
+{{end}}

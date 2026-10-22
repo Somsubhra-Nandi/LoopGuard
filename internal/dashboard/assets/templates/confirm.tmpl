@@ -1,0 +1,17 @@
+{{define "content"}}
+{{- with .Data}}
+<section class="card narrow">
+  <h1>{{.Title}}</h1>
+  <p>{{.Text}}</p>
+  <form method="post" action="/ui/action" class="actions">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="action" value="{{.Kind}}">
+    <input type="hidden" name="target" value="{{.Target}}">
+    <input type="hidden" name="for" value="{{.For}}">
+    <input type="hidden" name="back" value="{{.Back}}">
+    <button type="submit"{{if eq .Kind "stop"}} class="danger"{{end}}>{{.Button}}</button>
+    <a class="button secondary" href="{{.Back}}">Cancel</a>
+  </form>
+</section>
+{{- end}}
+{{end}}

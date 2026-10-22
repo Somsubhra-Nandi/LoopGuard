@@ -1,0 +1,20 @@
+{
+  "cwd": "<HOME>\\Desktop\\project",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "auto",
+  "prompt_id": "2360e5ac-c081-486f-bb14-d5325ddbc930",
+  "scratchpad_dir": "<HOME>\\AppData\\Local\\Temp\\claude\\<HOME>-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9\\scratchpad",
+  "session_id": "f9c69d47-a0fb-434f-848c-d6f16f954bf9",
+  "tool_input": {
+    "file_path": "<str:35>",
+    "new_string": "<str:53>",
+    "old_string": "<str:84>",
+    "replace_all": false
+  },
+  "tool_name": "Edit",
+  "tool_use_id": "toolu_017F7okwT6ikaVhepS9ADj3H",
+  "transcript_path": "<HOME>\\.claude\\projects\\<HOME>-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9.jsonl"
+}

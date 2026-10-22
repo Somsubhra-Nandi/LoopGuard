@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Sessions · LoopGuard</title>
+<link rel="stylesheet" href="/ui/static/style.css">
+<link rel="icon" href="/ui/static/icon.svg" type="image/svg+xml">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/ui/"><img src="/ui/static/icon.svg" alt="" width="22" height="22"> LoopGuard</a>
+  <nav aria-label="Pages">
+    <a href="/ui/">Overview</a>
+    <a href="/ui/sessions" aria-current="page">Sessions</a>
+    <a href="/ui/costs">Top costs</a>
+    <a href="/ui/settings">Settings</a>
+  </nav>
+  <form class="signout" method="post" action="/ui/logout"><input type="hidden" name="csrf" value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"><button type="submit" class="link">Sign out</button></form>
+</header>
+<main>
+
+<h1>Sessions</h1>
+<form class="filters card" method="get" action="/ui/sessions">
+  <label>Project
+    <select name="project">
+      <option value="">all</option>
+      <option value="/tmp/scratch">scratch</option>
+      <option value="/work/api" selected>api</option>
+      <option value="/work/shop">shop</option>
+    </select>
+  </label>
+  <label>From <input type="date" name="from" value=""></label>
+  <label>To <input type="date" name="to" value=""></label>
+  <label>Sort by
+    <select name="sort">
+      <option value="date">date</option>
+      <option value="cost" selected>cost</option>
+      <option value="loops">loops</option>
+    </select>
+  </label>
+  <button type="submit">Show</button>
+</form>
+<div class="scroll card flush"><table class="sessions">
+  <thead><tr><th>Project</th><th>Started</th><th class="num">Duration</th><th class="num">Tool calls</th><th class="num">Failures</th><th class="num">Loops</th><th class="num">Cost</th><th>Level</th></tr></thead>
+  <tbody>
+  <tr>
+    <td><a href="/ui/sessions/bbbb2222-0000-4000-8000-000000000002" title="/work/api">api</a> <span class="id">bbbb2222</span></td>
+    <td>2026-10-18 15:00</td>
+    <td class="num">30m</td>
+    <td class="num">35</td>
+    <td class="num">2</td>
+    <td class="num">0</td>
+    <td class="num">$1.81</td>
+    <td title="paused"><span class="level level-observe">observe</span> <span class="muted">now</span></td>
+  </tr>
+  </tbody>
+</table></div>
+<p class="sub">Level: what LoopGuard does in the session now (live), or for a session that isn't active, the level its next event would get ("now"). Costs are API-equivalent.</p>
+
+</main>
+<footer>
+  <p>Costs are API-equivalent: token usage priced at API rates. On a subscription you don't pay per token. Figures marked est. are estimates.</p>
+  <p>LoopGuard test · 2026-10-21 15:00 UTC</p>
+</footer>
+</body>
+</html>

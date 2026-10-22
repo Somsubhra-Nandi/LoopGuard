@@ -1,0 +1,9 @@
+{
+  "cwd": "<HOME>\\Desktop\\project",
+  "hook_event_name": "SessionEnd",
+  "prompt_id": "f15579da-391a-42ad-b828-15550728e0df",
+  "reason": "prompt_input_exit",
+  "scratchpad_dir": "<HOME>\\AppData\\Local\\Temp\\claude\\<HOME>-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9\\scratchpad",
+  "session_id": "f9c69d47-a0fb-434f-848c-d6f16f954bf9",
+  "transcript_path": "<HOME>\\.claude\\projects\\<HOME>-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9.jsonl"
+}

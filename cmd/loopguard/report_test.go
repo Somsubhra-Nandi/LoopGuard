@@ -14,6 +14,7 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
 	"github.com/Somsubhra-Nandi/loopguard/internal/replay"
 	"github.com/Somsubhra-Nandi/loopguard/internal/replay/replaytest"
+	"github.com/Somsubhra-Nandi/loopguard/internal/report"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
 
@@ -91,7 +92,7 @@ func TestReportSession(t *testing.T) {
 		t.Fatal("json report failed")
 	}
 	checkGolden(t, "report-session.json.golden", js)
-	var r sessionReport
+	var r report.Session
 	if err := json.Unmarshal([]byte(js), &r); err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +203,7 @@ func TestReportSummary(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
-	var r summaryReport
+	var r report.Summary
 	if err := json.Unmarshal([]byte(js), &r); err != nil {
 		t.Fatal(err)
 	}

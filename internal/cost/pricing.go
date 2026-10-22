@@ -55,6 +55,10 @@ type ModelPrice struct {
 	LongPrompt     *LongPrompt `yaml:"long_prompt" json:"long_prompt,omitempty"`
 	Source         string      `yaml:"source" json:"source,omitempty"`
 	Checked        string      `yaml:"checked" json:"checked"`
+	// IDVerified false: the model id was inferred (from the naming pattern
+	// of the ids seen in transcripts), not seen; the prices are still
+	// checked. Absent: verified.
+	IDVerified *bool `yaml:"id_verified" json:"id_verified,omitempty"`
 }
 
 // Verified reports whether someone checked the price against a source.
@@ -69,6 +73,13 @@ type Pricing struct {
 	CurrencyDisplay string       `yaml:"currency_display" json:"currency_display,omitempty"`
 	FXRate          float64      `yaml:"fx_rate" json:"fx_rate,omitempty"`
 	Models          []ModelPrice `yaml:"models" json:"models"`
+
+	lookups sync.Map // model id → lookup result (reports price thousands of rows)
+}
+
+type lookup struct {
+	m  ModelPrice
+	ok bool
 }
 
 // ParsePricing decodes and checks a price table. Unknown keys are errors
@@ -142,6 +153,16 @@ func (p *Pricing) Lookup(model string) (ModelPrice, bool) {
 	if p == nil || model == "" {
 		return ModelPrice{}, false
 	}
+	if v, ok := p.lookups.Load(model); ok {
+		l := v.(lookup)
+		return l.m, l.ok
+	}
+	m, ok := p.lookup(model)
+	p.lookups.Store(model, lookup{m, ok})
+	return m, ok
+}
+
+func (p *Pricing) lookup(model string) (ModelPrice, bool) {
 	ids := []string{strings.ToLower(model)}
 	base := bracketSuffix.ReplaceAllString(ids[0], "")
 	base = dateSuffix.ReplaceAllString(base, "")
@@ -221,6 +242,10 @@ func (p *Pricing) OutputRate(model string) (float64, bool) {
 	}
 	return mp.Output / 1e6, true
 }
+
+// IDAssumed reports whether the entry's model id was inferred rather than
+// seen (id_verified: false).
+func (m ModelPrice) IDAssumed() bool { return m.IDVerified != nil && !*m.IDVerified }
 
 // Unverified returns the entries whose price nobody checked.
 func (p *Pricing) Unverified() []ModelPrice {

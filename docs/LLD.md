@@ -40,7 +40,7 @@ loopguard/
 │   ├── notify/                     # desktop, ntfy, webhook (slack/discord), terminal-sequence
 │   ├── store/                      # sqlite (modernc.org/sqlite), migrations, repositories
 │   ├── replay/                     # offline transcript → event stream → detectors → report
-│   ├── dashboard/                  # go:embed templates + htmx, REST handlers
+│   ├── dashboard/                  # the local web UI: go:embed templates and CSS, server-side SVG, no scripts (§9.3)
 │   ├── config/                     # config.yaml + .loopguard.yaml merge, defaults, validation
 │   └── redact/                     # secret patterns
 ├── testdata/
@@ -416,7 +416,7 @@ All detectors look only at calls since the later of: the last human prompt (`Tur
 
 ### D6. Budget
 - **Inputs:** totals kept by the daemon across sessions (`usageBook`, §8.3), not one session's calls: API-equivalent cost and tokens from the transcript tailer (§8.1), wall minutes and completed tool calls from the hook events. `detect.Budget(limits, totals)` is pure, like the other detectors; it runs on every tool event (pre, post, post-failure, batch end), not in the per-call detector loop.
-- **Scopes:** `session` (one agent session with its subagents, its whole life), `daily` (all sessions, the local calendar day), `repo` (the sessions of one git repo, the local day). **Metrics:** `cost_usd` (API-equivalent, priced messages only), `tokens` (input + output + cache writes + cache reads, Claude Code's own convention), `wall_minutes` (first to latest event per session, summed over sessions for daily/repo), `tool_calls` (completed calls). Each has a soft and a hard limit; 0 is off. **Defaults: everything off except `daily.soft_usd: 20`.**
+- **Scopes:** `session` (one agent session with its subagents, its whole life), `daily` (all sessions, the local calendar day), `repo` (the sessions of one git repo, the local day). **Metrics:** `cost_usd` (API-equivalent, priced messages only), `tokens` (input + output + cache writes + cache reads, Claude Code's own convention), `wall_minutes` (first to latest event per session, summed over sessions for daily/repo), `tool_calls` (completed calls). Each has a soft and a hard limit; 0 is off. **Defaults: everything off** (§18 M4-B); `init` and `doctor` suggest one (`loopguard budget set daily.soft_usd 20`) but never set it.
 - **Fires when** a value is **over** a limit (at the limit is not over): one signal per scope and metric, the hard one if the hard limit is passed, else the soft one.
 - **Soft** (severity 0.5): one factual nudge per session and period, given with a tool result (post), reaching the agent at assist and guard (recorded as a would-have below); one `budget_soft` notification per period.
 - **Hard** (severity 1.0): at **guard**, a halt on **every tool event of the session while over the limit**, subagent streams included (unlike loop halts, decision 57: the budget is the session's, so usage from a subagent may stop the parent's turn); recorded once per turn. The next human prompt starts a turn whose first tool call halts again, so there is no "commands are not blocked now" note. Below guard: recorded once per period as a would-have; at notify and above one `budget_hard` notification per period.
@@ -563,10 +563,12 @@ models:                       # first match wins
     long_prompt: { above_tokens: 100000, input_per_mtok: …, … }   # Haiku 5.5: prompts over 100k tokens
     source: https://platform.claude.com/docs/en/about-claude/pricing
     checked: "2026-10-21"            # or "unverified"
+    id_verified: false               # the id was inferred, not seen in a transcript (absent: verified)
 ```
 
 - **Cost of a message** = (input × input + output × output + 5-minute writes × cache_write + one-hour writes × cache_write_1h + cache reads × cache_read) / 1e6, × the fast and US multipliers when they apply; the long-prompt rates when input + cache writes + cache reads is over `above_tokens`.
 - **Shipped prices** (all `checked: 2026-10-21`, from the official pricing page above): Fable 5.1, Mythos 5.1, Fable 5, Mythos 5, Opus 5.5, Opus 5, 4.8, 4.7, 4.6, 4.5, 4.1, 4, Sonnet 5.5, 5, 4.6, 4.5, 4, Haiku 5.5 (with its long-prompt tier), Haiku 4.5, Haiku 3.5. Checked against Claude Code's own `cost-state` lines (§18 M4-A).
+- **Model ids seen or inferred:** the pricing page names models ("Claude Opus 5.5") but shows no ids, so an entry's `match` is only certain once the id was seen in a transcript. Entries whose id follows the naming pattern of the seen ones get `id_verified: false`: their prices are checked, their id is not, and `doctor` lists them (and says which were seen in the last 30 days' usage, so `id_verified: true` can be set). A wrong id makes no wrong cost: that model shows under unknown models.
 - **Unknown or unverified models:** an entry with `checked: unverified` (or none) prices nothing: its tokens are counted and its cost is **unknown**, never 0 (`unpriced_tokens`); `doctor` warns about unverified entries and lists the models seen in the last 30 days without a price. `<synthetic>` messages (written by the client) cost 0.
 - **"API-equivalent" everywhere** (`replay`, `report`, `status`, budgets, notifications): subscription users don't pay per token; the number says what the same usage would cost through the API.
 - Costs are recomputed from the stored counters with the current table when read (`report`, `status` with the daemon down, the daemon's start), so a price added later applies to old usage too. `usage.cost_usd` is only the cost when written.
@@ -591,7 +593,8 @@ D6 (§6) is checked on every tool event against the limits in effect for the eve
 
 ### 9.1 Process and transport
 - Listens on `127.0.0.1:<port>`: default 47821, or the first free port, written to `~/.loopguard/daemon.json` along with the PID. Unix socket on macOS/Linux is optional later.
-- Auth: header `Authorization: Bearer <token>` with the token from `~/.loopguard/token` (random 32 bytes, mode 0600). Dashboard routes accept a cookie set via a one-time link printed by `loopguard dashboard`.
+- Auth: header `Authorization: Bearer <token>` with the token from `~/.loopguard/token` (random 32 bytes, mode 0600). The dashboard (`/ui/`) takes no token: only its session cookie, set by a one-time link that `loopguard dashboard` gets from `POST /v1/dashboard/login` (§9.3).
+
 - Single instance enforced by a PID file plus a port bind check.
 
 ### 9.2 Session manager and actors
@@ -625,8 +628,31 @@ type job struct { ev *event.Event; reply chan event.Decision }
 | `GET /v1/decisions?limit=10` | Newest decisions of all sessions (in observe mode: what it would have done), with detector, reason, and time (`loopguard status`) |
 | `GET /healthz`, `GET /metrics` | Health (version, pid, home id, store, capture on/off, start time) and Prometheus metrics |
 | `POST /v1/shutdown` | Stop the daemon (`loopguard daemon stop`) |
+| `POST /v1/dashboard/login` | A one-time dashboard login link `{"url", "expires_at"}` (`loopguard dashboard`) |
+| `GET /ui/…` | The dashboard (below): cookie only, never the token |
 
 The adapter renders on the daemon side so the shim stays dumb. Only the shim has to be backward-compatible across versions.
+
+### 9.4 Dashboard (`internal/dashboard`)
+
+Served by the daemon on its port under `/ui/`; `loopguard dashboard` starts the daemon if needed, gets a login link, prints it, and opens it in the default browser (`--no-open`: print only).
+
+| Page | Shows |
+|---|---|
+| `/ui/` Overview | today / 7 days / 30 days: sessions, tool calls, tokens, API-equivalent cost, loops caught, interventions (real, would-have), recovery rate (real, would-have), time and cost inside loops (est.); a 30-day bar chart of daily cost with the part inside loops highlighted (inline SVG, with the numbers in a table behind it); the budgets in effect against today's usage and each live session's |
+| `/ui/sessions` | one row per agent session (subagents merged): project, start, duration, tool calls, failures, loops, cost, level (live: the session's; else the level its next event would get); filter by project and dates, sort by date, cost, or loops |
+| `/ui/sessions/{id}` | `report <id>` as a vertical timeline: turns, call groups (failed ones marked), loop spans highlighted where they start, with what LoopGuard did and the outcome; tokens and cost per turn; top 10 by estimated cost and largest outputs (est.); pause/resume the session or its repo, stop a live session's turn. Without a transcript: the database's record and interventions |
+| `/ui/costs` | the 7-day top 10 by estimated cost across sessions, and the largest outputs (`report`'s, from the transcripts; cached 2 minutes) |
+| `/ui/settings` | read-only: the level per repo seen in the last 30 days and why (with pause/resume), detectors and thresholds, budgets, notification channels (ntfy topic and webhook path masked), pricing status, version |
+| `/ui/api/overview`, `/ui/api/sessions`, `/ui/api/sessions/{id}` | the same data as JSON (cookie auth) |
+
+- **One implementation of the numbers:** every figure comes from `internal/report`, the package `report`, `stats`, and `status`'s database fallback use (`report.Overview` = `BuildSummary` plus the days, `BuildSession`, `ListSessions`, `TopCosts`, `BuildStats`), and is formatted with the same functions. Budgets come from the daemon's usage book (`/v1/usage`, as `status` shows them).
+- **Auth:** the link's code is 32 random bytes, valid once for 2 minutes (at most 16 unused). Redeeming it sets `loopguard_dashboard`: HttpOnly, SameSite=Strict, `Path=/ui`, 12 hours; sessions live in the daemon's memory (a restart signs out; at most 32). Only hashes of codes and cookies are kept. No cookie → 401.
+- **Requests:** `Host` must be exactly `127.0.0.1:<port>` or `localhost:<port>` → else 403 (DNS rebinding; the API keeps its looser check). State changes are POST only, with the session's CSRF token in the form; a present `Origin` must be the dashboard's and `Sec-Fetch-Site` must be `same-origin` → else 403. Every action has a confirm page of its own (also POST + CSRF). Pause/resume write the `pauses` table and reload the daemon's copy; stop is `/v1/stop`'s logic for one exact session id.
+- **Headers:** `Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'` (no script runs at all, no inline style), `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: no-referrer`, COOP/CORP same-origin, `Cache-Control: no-store`. No CORS headers, ever.
+- **Nothing external:** templates, the stylesheet, and the icon are embedded (go:embed); charts are SVG drawn on the server. Light and dark follow `prefers-color-scheme`; tables scroll inside their card on a narrow window.
+- **Speed:** the overview's totals and the default (30-day) session list are a snapshot shared by the pages: served as is under 15 s old, served while a new one is computed between 15 s and 2 min, recomputed while the page waits when older; a login link computes one ahead. Live state (levels, live sessions, pauses, budgets) is read per request. Other date ranges are computed for the page.
+
 
 ---
 
@@ -803,7 +829,7 @@ error_marker_families: ["pytest", "jest", "vitest", "go test", "cargo test", "ca
                         "npm test", "yarn test", "pnpm test", "bun test", "npm run test", "yarn run test",
                         "pnpm run test", "bun run test", "npx jest", "npx vitest", "npx tsc",
                         "mvn", "mvnw", "gradle", "gradlew", "make", "dotnet test"]
-budgets:                 # D6 (§6); 0 or absent = off. Default: only daily soft_usd 20
+budgets:                 # D6 (§6); 0 or absent = off. Default: all off (an example, not defaults:)
   session: { soft_usd: 5, hard_usd: 15, soft_tokens: 0, hard_tokens: 0,
              soft_wall_minutes: 0, hard_wall_minutes: 180, soft_tool_calls: 0, hard_tool_calls: 0 }
   daily:   { soft_usd: 20, hard_usd: 50 }      # all sessions, local day
@@ -819,6 +845,9 @@ privacy:
   retention_days: 30
   store_outputs: tail   # none | tail
 ```
+
+**`loopguard budget show | set <scope.key> <value> | clear <scope.key>`** edits the `budgets:` section of config.yaml through the same editor as `loopguard mode` (comments, key order, and other keys kept; the file is replaced atomically, and a result that would be invalid is refused untouched). Keys are `<scope>.<soft|hard>_<usd|tokens|wall_minutes|tool_calls>`, with or without `budgets.`; a value must be a number above 0 (`$` allowed for usd; tokens and tool calls whole), and `soft > hard` is refused by the config's own check. `clear` removes the key (0 would mean the same). The daemon picks the change up within 2 s.
+
 
 ---
 
@@ -1210,3 +1239,27 @@ Cost, budgets, and `loopguard report`: decisions the sections above didn't speci
 121. **Replay reports cost** (`cost` in `--json`; schema version unchanged, the field is additive): totals, per session, per loop, and inside loops. On the private corpus (23 sessions, 24 streams, 2,914 calls): 736.6M tokens (725.1M of them cache reads), $358.02 API-equivalent, every model priced, $0 inside loops (it has no loops); 0.7 s.
 122. **Anonymized exports keep usage** (counts, model, hashed message id), compaction boundaries, and each result's original length (`chars`). The three committed fixtures were re-exported and merged with their committed tool results (the current soft-failure rules would flip `is_error` on 23 results and change the golden's failure statistics), so the golden changed only in line counts and the new cost section ($69.26 for the three).
 123. **`report` is no longer a stub**; `stubCmd` and its test are gone.
+
+### M4-B
+
+The dashboard, and two fixes from the M4-A review.
+
+**Budgets and pricing** (§6 D6, §8.2, §12)
+124. **All budgets are off by default** (supersedes decision 114). Even a soft daily warning would fire every day for heavy users, and for subscription users the cost is only API-equivalent. `init` and `doctor` print "No budget set. Example: loopguard budget set daily.soft_usd 20" and never set one. `budget_soft` and `budget_hard` stay in the default notification events, so a budget the user sets notifies without more setup.
+125. **`loopguard budget show | set | clear`** (§12) rather than a generic `config set`: budgets are the setting people tune most, and their keys and values can be checked one by one (scope, level, metric, a positive number, whole numbers for tokens and calls) before the file-level check (`soft > hard`).
+126. **`id_verified: false`** marks 15 shipped entries: every model but the five whose ids the committed fixtures (exported from the private corpus) contain: `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-6`, `claude-haiku-5-5`, `claude-haiku-4-5`. The pricing page (fetched again for this) shows model names only, no ids. Absent means verified, so the user's own entries and existing `pricing.yaml` files (never rewritten) are unaffected; such a file lacks the flags until the user adds them. `doctor` lists the inferred ids and calls out those seen in the last 30 days' usage.
+
+**Numbers** (§8, §9.4)
+127. **`internal/report`** now holds what `report`, `stats`, and the dashboard compute (it was in `package main`, which the daemon can't import): periods, the session timeline, the session list, top costs, and the stats; the CLI keeps only printing. `report --json` is unchanged except for two additive fields: periods have `recovery_rate_real`/`recovery_rate_would_have` (from `BuildStats`, as `stats` computes them), and `stats --json` has overall `real`/`would_have` outcome counts and rates.
+128. **The periods read the database once** (`report.Overview`): the sessions, usage rows, and loop spans of the earliest period, sliced per period (`LoopSpan.LastSeen` keeps the "streams last seen since" rule); the daily chart uses the same rows and spans, so its days add up to the period that starts at the first day. Model lookups are memoized per table (a regex per row before).
+129. **Fix:** a period's tool calls no longer count `loopguard doctor`'s synthetic session (its session count already left it out).
+130. **Sessions are agent sessions**: the main stream and its subagents merged, tool calls and failures from the `sessions` rows (as `status`), cost from their usage rows re-priced, loops counted as the periods count them (`LoopSpans` at the nudge threshold), so the list's costs add up to the period's. An inactive session's level is the one its next event would get (config files and pauses), marked "now".
+
+**Dashboard** (§9.4)
+131. **No JavaScript at all**, instead of htmx: every page is server-rendered HTML with forms, so the CSP can forbid scripts outright (`default-src 'none'`), there is nothing to vendor or update, and nothing on the page can run in the browser. The cost: filters and actions reload the page, and confirmations are a page of their own.
+132. **Confirm step = a second POST**: the action's form posts to `/ui/confirm`, which shows what will happen and a form to `/ui/action`; both need the CSRF token. Targets are checked against the database (a known session id, a repo with a session), stop against the live sessions, and `back` links must stay under `/ui/`.
+133. **Defense in depth on POSTs**: besides the token, a present `Origin` must be the dashboard's own and `Sec-Fetch-Site` must be `same-origin`. Cookies don't separate ports, so a page served by another local program on 127.0.0.1 is "same-site" (SameSite=Strict lets its requests carry the cookie); the token and these checks refuse them, and it can't read the dashboard's responses (another origin, no CORS).
+134. **The strict Host check is the dashboard's only**: `/ui/` needs the exact port; the API keeps accepting any port on 127.0.0.1/localhost, as before (the shim and the CLI already send the right one, but a change there wasn't needed).
+135. **A snapshot for the 30-day totals** (§9.4 Speed). Measured on 500 sessions of realistic size (95 API messages and 60 tool calls each, about 47,500 usage rows; `TestPagePerformance`): reading 30 days of usage takes 320 ms through `database/sql` and still 206 ms grouped inside SQLite (modernc is a Go translation of SQLite, several times slower than C), so no page that reads them per request can stay under 200 ms. With the snapshot: overview, sessions (any sort or project), settings, and a session page render in 0-25 ms; computing a snapshot cold takes about 1 s, done ahead when a login link is issued. A date range other than the last 30 days is computed for the page (380-520 ms at this size).
+136. **Session timelines and top costs come from the transcripts**, as `report` does (the database keeps neither turns nor output sizes): a session page replays one transcript, and the 7-day top costs replay the week's (cached 2 minutes). In a test binary the daemon's dashboard reads no transcripts unless a test gives a directory, so tests never touch the real `~/.claude`.
+137. **Golden HTML** (`internal/dashboard/testdata/*.golden.html`, `go test ./internal/dashboard -update`) for every page on a fixture database and transcript, with a fixed clock, UTC, and a fixed random source; paths are normalized. `TestDashboardMatchesReport` (cmd/loopguard) compares `/ui/api/overview` and `/ui/api/sessions/{id}` with `report --json` and `report <id> --json` on the same database, and checks the page shows their costs.

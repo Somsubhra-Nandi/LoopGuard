@@ -1,0 +1,10 @@
+{{define "content"}}
+{{- with .Data}}
+<h1>Top costs</h1>
+{{- if .Error}}<p class="notice">{{.Error}}</p>{{end}}
+{{- with .Estimates}}
+<p class="sub">The 10 kinds of tool call with the highest estimated cost in the {{.Window}} ({{.Streams}} streams, {{usd .CostUSD}} in all, API-equivalent).</p>
+{{template "estimates" .}}
+{{- end}}
+{{- end}}
+{{end}}

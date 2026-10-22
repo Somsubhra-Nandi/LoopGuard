@@ -1,0 +1,9 @@
+{
+  "cwd": "<HOME>\\Desktop\\project",
+  "hook_event_name": "SessionStart",
+  "model": "claude-opus-5-5",
+  "scratchpad_dir": "<HOME>\\AppData\\Local\\Temp\\claude\\<HOME>-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9\\scratchpad",
+  "session_id": "f9c69d47-a0fb-434f-848c-d6f16f954bf9",
+  "source": "startup",
+  "transcript_path": "<HOME>\\.claude\\projects\\<HOME>-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9.jsonl"
+}

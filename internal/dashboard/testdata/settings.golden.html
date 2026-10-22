@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Settings · LoopGuard</title>
+<link rel="stylesheet" href="/ui/static/style.css">
+<link rel="icon" href="/ui/static/icon.svg" type="image/svg+xml">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/ui/"><img src="/ui/static/icon.svg" alt="" width="22" height="22"> LoopGuard</a>
+  <nav aria-label="Pages">
+    <a href="/ui/">Overview</a>
+    <a href="/ui/sessions">Sessions</a>
+    <a href="/ui/costs">Top costs</a>
+    <a href="/ui/settings" aria-current="page">Settings</a>
+  </nav>
+  <form class="signout" method="post" action="/ui/logout"><input type="hidden" name="csrf" value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"><button type="submit" class="link">Sign out</button></form>
+</header>
+<main>
+
+<h1>Settings</h1>
+<p class="sub">Read-only: change them with loopguard mode, pause, budget, and notify, or in <HOME>/config.yaml.</p>
+
+<section class="card">
+  <h2>Level</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Where</th><th>Level</th><th>Why</th><th></th></tr></thead>
+    <tbody>
+    <tr><td title="/work/api">api</td>
+      <td><span class="level level-observe">observe</span></td><td>paused</td><td>
+<div class="actions">
+<form method="post" action="/ui/confirm">
+  <input type="hidden" name="csrf" value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">
+  <input type="hidden" name="action" value="resume-repo">
+  <input type="hidden" name="target" value="/work/api">
+  <input type="hidden" name="back" value="/ui/settings">
+  <button type="submit">Resume</button>
+</form>
+</div></td></tr>
+    <tr><td title="/work/shop">shop</td>
+      <td><span class="level level-guard">guard</span></td><td>mode: guard in config.yaml</td><td>
+<div class="actions">
+<form method="post" action="/ui/confirm">
+  <input type="hidden" name="csrf" value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">
+  <input type="hidden" name="action" value="pause-repo">
+  <input type="hidden" name="target" value="/work/shop">
+  <input type="hidden" name="back" value="/ui/settings">
+  <select name="for" aria-label="How long">
+    <option value="30m">30 minutes</option>
+    <option value="2h" selected>2 hours</option>
+    <option value="1d">1 day</option>
+    <option value="">until resumed</option>
+  </select>
+  <button type="submit">Pause</button>
+</form>
+</div></td></tr>
+    <tr><td>everywhere else</td><td><span class="level level-guard">guard</span></td><td>mode: guard in config.yaml</td><td></td></tr>
+    </tbody>
+  </table></div>
+  <p>Pauses in effect:</p>
+  <ul><li>repo /work/api: paused until resumed</li></ul>
+  <p class="sub">Repos are those with a session in the last 30 days. A repo's .loopguard.yaml can raise its level, never lower it; a pause makes any level observe.</p>
+</section>
+
+<section class="card">
+  <h2>Detectors</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Detector</th><th>On</th><th>Thresholds</th></tr></thead>
+    <tbody>
+    <tr><td>exact_repeat (D1)</td><td>on</td><td>min_count 3</td></tr>
+    <tr><td>repeated_failure (D2)</td><td>on</td><td>min_count 4, max_progress 1</td></tr>
+    <tr><td>oscillation (D3)</td><td>on</td><td>min_revisits 2, revisit_window 20</td></tr>
+    <tr><td>read_thrash (D4)</td><td>on</td><td>min_reads 5</td></tr>
+    <tr><td>stall (D5)</td><td>on</td><td>window 25</td></tr>
+    <tr><td>budget (D6)</td><td>on</td><td>see Budgets</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Policy and windows</h3>
+  <dl class="stats wide">
+    <dt>window</dt><dd>50</dd>
+    <dt>simhash_max_distance</dt><dd>4</dd>
+    <dt>nudge_threshold</dt><dd>0.55</dd>
+    <dt>deny_after_nudges_occurrences</dt><dd>3</dd>
+    <dt>deny_min_severity</dt><dd>0.7</dd>
+    <dt>halt_after_deny_occurrences</dt><dd>2</dd>
+    <dt>halt_after_minutes</dt><dd>20</dd>
+    <dt>max_nudges_per_turn</dt><dd>3</dd>
+    <dt>nudge_cooldown_calls</dt><dd>10</dd>
+    <dt>reset_quiet_calls</dt><dd>15</dd>
+    <dt>reset_progress</dt><dd>1</dd>
+    <dt>manual_mode_extra_occurrences</dt><dd>1</dd>
+    <dt>polling_families</dt><dd>sleep, watch, gh run watch, gh pr checks, git status, docker ps, ls</dd>
+    <dt>slow_families</dt><dd>-</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <h2>Budgets</h2>
+  <dl class="stats wide">
+    <dt>session.hard_tool_calls</dt><dd>400</dd>
+    <dt>daily.soft_usd</dt><dd>$20.00</dd>
+    <dt>daily.hard_usd</dt><dd>$50.00</dd>
+  </dl>
+  <p class="sub">Soft: notify, and one note to the agent at assist and guard. Hard: stop the turn at guard. Costs are API-equivalent.</p>
+</section>
+
+<section class="card">
+  <h2>Notifications</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Channel</th><th>On</th><th>Target</th><th>Events</th></tr></thead>
+    <tbody>
+    <tr><td>desktop</td><td>on</td><td>-</td><td>loop_detected, halt, budget_soft, budget_hard</td></tr>
+    <tr><td>terminal</td><td>off</td><td>-</td><td>loop_detected, halt, budget_soft, budget_hard</td></tr>
+    <tr><td>ntfy</td><td>on</td><td>https://ntfy.sh/se••••</td><td>halt</td></tr>
+    <tr><td>webhook</td><td>off</td><td>-</td><td>loop_detected, halt, budget_soft, budget_hard</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="card">
+  <h2>Pricing</h2>
+  <dl class="stats wide">
+    <dt>File</dt><dd><HOME>/pricing.yaml (not written yet: the shipped prices apply)</dd>
+    <dt>Models</dt><dd>20, checked 2026-10-21</dd><dt>Ids inferred</dt><dd>claude-fable-5-1, claude-mythos-5-1, claude-fable-5, claude-mythos-5, claude-opus-4-8, claude-opus-4-7, claude-opus-4-5, claude-opus-4-1, claude-opus-4, claude-sonnet-5-5, claude-sonnet-5, claude-sonnet-4-6, claude-sonnet-4-5, claude-sonnet-4, claude-3-5-haiku (prices checked; the model id follows the naming pattern but wasn't seen in a transcript)</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <h2>About</h2>
+  <dl class="stats wide">
+    <dt>Version</dt><dd>test</dd>
+    <dt>Home</dt><dd><HOME></dd>
+  </dl>
+</section>
+
+</main>
+<footer>
+  <p>Costs are API-equivalent: token usage priced at API rates. On a subscription you don't pay per token. Figures marked est. are estimates.</p>
+  <p>LoopGuard test · 2026-10-21 15:00 UTC</p>
+</footer>
+</body>
+</html>

@@ -17,6 +17,7 @@ import (
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/adapter"
 	"github.com/Somsubhra-Nandi/loopguard/internal/capture"
+	"github.com/Somsubhra-Nandi/loopguard/internal/dashboard"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
 
@@ -52,6 +53,8 @@ type server struct {
 	captureOn *capture.Switch
 	started   time.Time
 	shutdown  func()
+	home      string
+	dash      *dashboard.Dashboard
 }
 
 func (d *server) storeMode() string {
@@ -123,6 +126,8 @@ func (d *server) routes() http.Handler {
 	mux.Handle("GET /v1/usage", d.auth(d.usage))
 	mux.Handle("GET /metrics", d.auth(d.metrics))
 	mux.Handle("POST /v1/shutdown", d.auth(d.shutdownHandler))
+	mux.Handle("POST /v1/dashboard/login", d.auth(d.dashboardLogin))
+	mux.Handle(dashboard.Prefix, d.dash.Handler())
 	return d.hostCheck(mux)
 }
 

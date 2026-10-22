@@ -1,0 +1,42 @@
+{
+  "agent": "claude-code",
+  "session_id": "f9c69d47-a0fb-434f-848c-d6f16f954bf9",
+  "phase": "post",
+  "tool_name": "edit",
+  "tool_use_id": "toolu_017F7okwT6ikaVhepS9ADj3H",
+  "input": {
+    "file_path": "\u003cstr:35\u003e",
+    "new_string": "\u003cstr:53\u003e",
+    "old_string": "\u003cstr:84\u003e",
+    "replace_all": false
+  },
+  "output": {
+    "filePath": "\u003cstr:35\u003e",
+    "newString": "\u003cstr:53\u003e",
+    "oldString": "\u003cstr:84\u003e",
+    "originalFile": "\u003cstr:217\u003e",
+    "replaceAll": false,
+    "structuredPatch": [
+      {
+        "lines": [
+          "\u003cstr:29\u003e",
+          "\u003cstr:1\u003e",
+          "\u003cstr:1\u003e",
+          "\u003cstr:22\u003e",
+          "\u003cstr:37\u003e",
+          "\u003cstr:26\u003e",
+          "\u003cstr:28\u003e",
+          "\u003cstr:26\u003e"
+        ],
+        "newLines": 5,
+        "newStart": 9,
+        "oldLines": 6,
+        "oldStart": 9
+      }
+    ],
+    "userModified": false
+  },
+  "cwd": "\u003cHOME\u003e\\Desktop\\project",
+  "transcript": "\u003cHOME\u003e\\.claude\\projects\\\u003cHOME\u003e-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9.jsonl",
+  "perm_mode": "auto"
+}

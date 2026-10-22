@@ -235,6 +235,9 @@ func initMode(out io.Writer, enforce, newInstall bool) error {
 	default:
 		fmt.Fprintln(out, "  Pause it with: loopguard pause --all --for 2h   Record only: loopguard mode observe")
 	}
+	if !config.NewLoader(dir, config.LoaderOptions{}).For("").Budgets.Any() {
+		fmt.Fprintln(out, "No budget set. Example: "+config.ExampleBudget)
+	}
 	return nil
 }
 

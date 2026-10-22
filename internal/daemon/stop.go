@@ -50,6 +50,14 @@ func (d *server) stop(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "give a session or all", http.StatusBadRequest)
 		return
 	}
+	code, reply := d.requestStop(req)
+	writeJSON(w, code, reply)
+}
+
+// requestStop marks the live sessions req names so that their next tool
+// event gets the halt reply, and says which (status 200; 404 none; 409
+// an ambiguous prefix).
+func (d *server) requestStop(req StopRequest) (int, StopReply) {
 	byID := map[string]StopTarget{}
 	for key, s := range d.mgr.Live() {
 		if strings.Contains(key, "/") || s.SessionID == doctorSessionID || !s.EndedAt.IsZero() {
@@ -67,8 +75,7 @@ func (d *server) stop(w http.ResponseWriter, r *http.Request) {
 		switch len(byID) {
 		case 0:
 			reply.Error = "no active session id starts with " + req.Session
-			writeJSON(w, http.StatusNotFound, reply)
-			return
+			return http.StatusNotFound, reply
 		case 1:
 		default:
 			reply.Error = req.Session + " matches several active sessions"
@@ -76,8 +83,7 @@ func (d *server) stop(w http.ResponseWriter, r *http.Request) {
 				reply.Matches = append(reply.Matches, id)
 			}
 			sort.Strings(reply.Matches)
-			writeJSON(w, http.StatusConflict, reply)
-			return
+			return http.StatusConflict, reply
 		}
 	}
 	now := time.Now()
@@ -93,7 +99,7 @@ func (d *server) stop(w http.ResponseWriter, r *http.Request) {
 	for _, ts := range [][]StopTarget{reply.Stopped, reply.Refused} {
 		sort.Slice(ts, func(i, j int) bool { return ts[i].SessionID < ts[j].SessionID })
 	}
-	writeJSON(w, http.StatusOK, reply)
+	return http.StatusOK, reply
 }
 
 // interactive reports whether a hook event comes from a terminal session

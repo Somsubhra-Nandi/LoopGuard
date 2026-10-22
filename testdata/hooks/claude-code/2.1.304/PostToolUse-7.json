@@ -1,0 +1,47 @@
+{
+  "cwd": "<HOME>\\Desktop\\project",
+  "duration_ms": 65,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "auto",
+  "prompt_id": "2360e5ac-c081-486f-bb14-d5325ddbc930",
+  "scratchpad_dir": "<HOME>\\AppData\\Local\\Temp\\claude\\<HOME>-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9\\scratchpad",
+  "session_id": "f9c69d47-a0fb-434f-848c-d6f16f954bf9",
+  "tool_input": {
+    "file_path": "<str:35>",
+    "new_string": "<str:53>",
+    "old_string": "<str:84>",
+    "replace_all": false
+  },
+  "tool_name": "Edit",
+  "tool_response": {
+    "filePath": "<str:35>",
+    "newString": "<str:53>",
+    "oldString": "<str:84>",
+    "originalFile": "<str:217>",
+    "replaceAll": false,
+    "structuredPatch": [
+      {
+        "lines": [
+          "<str:29>",
+          "<str:1>",
+          "<str:1>",
+          "<str:22>",
+          "<str:37>",
+          "<str:26>",
+          "<str:28>",
+          "<str:26>"
+        ],
+        "newLines": 5,
+        "newStart": 9,
+        "oldLines": 6,
+        "oldStart": 9
+      }
+    ],
+    "userModified": false
+  },
+  "tool_use_id": "toolu_017F7okwT6ikaVhepS9ADj3H",
+  "transcript_path": "<HOME>\\.claude\\projects\\<HOME>-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9.jsonl"
+}

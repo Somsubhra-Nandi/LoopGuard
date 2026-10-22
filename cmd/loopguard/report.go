@@ -3,26 +3,20 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
-	"github.com/Somsubhra-Nandi/loopguard/internal/redact"
 	"github.com/Somsubhra-Nandi/loopguard/internal/replay"
+	"github.com/Somsubhra-Nandi/loopguard/internal/report"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
-
-// topEstimates is how many groups the "by estimated cost" tables list.
-const topEstimates = 10
 
 func newReportCmd() *cobra.Command {
 	var asJSON bool
@@ -94,224 +88,60 @@ func writeIndented(w io.Writer, v any) error {
 	return enc.Encode(v)
 }
 
-// estimateReport ranks tool calls by estimated cost.
-type estimateReport struct {
-	Window  string                  `json:"window"`
-	Streams int                     `json:"streams"`
-	CostUSD float64                 `json:"cost_usd"` // the real cost the shares are of
-	Top     []replay.GroupEstimate  `json:"top"`
-	Largest []replay.OutputEstimate `json:"largest_outputs"`
-}
-
-// summaryReport is `loopguard report` without a session.
-type summaryReport struct {
-	Basis     string          `json:"basis"`
-	Database  bool            `json:"database"` // false: LoopGuard has recorded nothing yet
-	Periods   []periodReport  `json:"periods"`
-	Estimates *estimateReport `json:"estimates,omitempty"` // last 7 days, from the transcripts
-	Errors    []string        `json:"errors,omitempty"`
-}
-
-type periodReport struct {
-	Name           string     `json:"name"` // today | 7d | 30d
-	Since          time.Time  `json:"since"`
-	Sessions       int        `json:"sessions"`
-	ToolCalls      int64      `json:"tool_calls"`
-	Tokens         int64      `json:"tokens"`
-	Usage          cost.Usage `json:"usage"`
-	CostUSD        float64    `json:"cost_usd"`
-	UnpricedTokens int64      `json:"unpriced_tokens"`
-	UnknownModels  []string   `json:"unknown_models"`
-	Loops          int        `json:"loops"`
-	Interventions  struct {
-		Real  int64 `json:"real"`
-		Would int64 `json:"would_have"`
-	} `json:"interventions"`
-	// LoopSeconds and LoopCostUSD estimate the time and cost inside loops:
-	// from each loop's first call to its last (overlaps once), and the
-	// usage recorded in that time.
-	LoopSeconds float64 `json:"est_loop_seconds"`
-	LoopCostUSD float64 `json:"est_loop_cost_usd"`
-}
-
-func buildSummaryReport(dir, path string, pricing *cost.Pricing, at time.Time) summaryReport {
-	r := summaryReport{Basis: replay.CostBasis, Periods: []periodReport{}}
-	today := time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, at.Location())
-	periods := []periodReport{
-		{Name: "today", Since: today},
-		{Name: "7d", Since: at.Add(-7 * 24 * time.Hour)},
-		{Name: "30d", Since: at.Add(-30 * 24 * time.Hour)},
-	}
+// buildSummaryReport is `loopguard report` without a session: the
+// periods from the database (if there is one) and the last 7 days'
+// estimates from the transcripts.
+func buildSummaryReport(dir, path string, pricing *cost.Pricing, at time.Time) report.Summary {
+	var st *store.Store
+	var dbErr error
 	if db := filepath.Join(dir, home.DBFile); fileExists(db) {
-		if st, err := store.Open(db); err != nil {
-			r.Errors = append(r.Errors, "database: "+err.Error())
-		} else {
+		if st, dbErr = store.Open(db); dbErr == nil {
 			defer st.Close()
-			r.Database = true
-			nudgeAt := config.Default().Policy.NudgeThreshold
-			for i := range periods {
-				if err := fillPeriod(st, &periods[i], pricing, nudgeAt); err != nil {
-					r.Errors = append(r.Errors, err.Error())
-				}
-			}
 		}
 	}
-	r.Periods = periods
-
-	// The estimates come from the transcripts: the database keeps no
-	// output sizes.
-	streams, err := replay.Discover(path, replay.Filter{Since: at.Add(-7 * 24 * time.Hour)})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r := report.BuildSummary(ctx, st, pricing, at, report.NudgeAt())
+	if dbErr != nil {
+		r.Errors = append([]string{"database: " + dbErr.Error()}, r.Errors...)
+	}
+	est, err := report.TopCosts(path, pricing, at)
 	if err != nil {
 		r.Errors = append(r.Errors, "transcripts: "+err.Error())
 		return r
 	}
-	res := replay.Run(streams, replay.Options{Thresholds: config.Default(), Pricing: pricing})
-	top, largest := res.Costs.Estimates(topEstimates, nil)
-	r.Estimates = &estimateReport{Window: "transcripts changed in the last 7 days", Streams: len(streams),
-		CostUSD: res.Costs.CostUSD, Top: top, Largest: largest}
+	r.Estimates = est
 	return r
 }
 
-func fillPeriod(st *store.Store, p *periodReport, pricing *cost.Pricing, nudgeAt float64) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	sessions, err := st.ListSessions(ctx, store.ListOptions{Since: p.Since, Limit: 100000})
-	if err != nil {
-		return err
-	}
-	ids := map[string]bool{}
-	for _, s := range sessions {
-		if s.SessionID != doctorSession {
-			ids[s.SessionID] = true
-		}
-	}
-	p.Sessions = len(ids)
-	calls, err := st.CallCounts(ctx, p.Since)
-	if err != nil {
-		return err
-	}
-	for _, n := range calls {
-		p.ToolCalls += n
-	}
-	rows, err := st.UsageRows(ctx, store.UsageFilter{Since: p.Since})
-	if err != nil {
-		return err
-	}
-	unknown := map[string]bool{}
-	for _, u := range rows {
-		m := usageMessage(u)
-		p.Usage = p.Usage.Add(m.Usage)
-		if usd, ok := pricing.Cost(m); ok {
-			p.CostUSD += usd
-		} else {
-			p.UnpricedTokens += m.Usage.Total()
-			unknown[m.Model] = true
-		}
-	}
-	p.Tokens = p.Usage.Total()
-	p.UnknownModels = sortedKeys(unknown)
-	ivs, err := st.InterventionStats(ctx, p.Since)
-	if err != nil {
-		return err
-	}
-	for _, c := range ivs {
-		if c.Mode == store.ModeEnforce {
-			p.Interventions.Real += c.Count
-		} else {
-			p.Interventions.Would += c.Count
-		}
-	}
-	spans, err := st.LoopSpans(ctx, p.Since, nudgeAt)
-	if err != nil {
-		return err
-	}
-	p.Loops = len(spans)
-	// Time inside loops: per stream, the union of the loops' spans; cost:
-	// the stream's usage in that time.
-	byKey := map[string][]store.LoopSpan{}
-	for _, sp := range spans {
-		byKey[sp.SessionKey] = append(byKey[sp.SessionKey], sp)
-	}
-	for key, sps := range byKey {
-		merged := mergeSpans(sps)
-		for _, m := range merged {
-			p.LoopSeconds += m[1].Sub(m[0]).Seconds()
-		}
-		for _, u := range rows {
-			if u.SessionKey != key {
-				continue
-			}
-			for _, m := range merged {
-				if !u.TS.Before(m[0]) && !u.TS.After(m[1]) {
-					if usd, ok := pricing.Cost(usageMessage(u)); ok {
-						p.LoopCostUSD += usd
-					}
-					break
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// mergeSpans returns the union of loop spans as [start, end] pairs.
-func mergeSpans(sps []store.LoopSpan) [][2]time.Time {
-	sort.Slice(sps, func(i, j int) bool { return sps[i].Start.Before(sps[j].Start) })
-	var out [][2]time.Time
-	for _, sp := range sps {
-		if sp.Start.IsZero() || sp.End.Before(sp.Start) {
-			continue
-		}
-		if n := len(out); n > 0 && !sp.Start.After(out[n-1][1]) {
-			if sp.End.After(out[n-1][1]) {
-				out[n-1][1] = sp.End
-			}
-			continue
-		}
-		out = append(out, [2]time.Time{sp.Start, sp.End})
-	}
-	return out
-}
-
-func usageMessage(u store.Usage) cost.Message {
-	return cost.Message{ID: u.MessageID, Model: u.Model, TS: u.TS, Speed: u.Speed, Geo: u.Geo,
-		Usage: cost.Usage{Input: u.Input, Output: u.Output, CacheWrite: u.CacheWrite, CacheRead: u.CacheRead, CacheWrite1h: u.CacheWrite1h}}
-}
-
-func sortedKeys(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func printSummaryReport(out io.Writer, r summaryReport, p *cost.Pricing) {
+func printSummaryReport(out io.Writer, r report.Summary, p *cost.Pricing) {
 	fmt.Fprintln(out, "LoopGuard report (costs are API-equivalent: token usage at API prices)")
 	if !r.Database {
 		fmt.Fprintln(out, "\nLoopGuard has recorded nothing yet (no database). Live totals start once the hooks run (loopguard init).")
 	} else {
 		fmt.Fprintf(out, "\n%-28s %14s %14s %14s\n", "", "today", "last 7 days", "last 30 days")
-		row := func(label string, f func(periodReport) string) {
+		row := func(label string, f func(report.Period) string) {
 			fmt.Fprintf(out, "%-28s", label)
 			for _, pr := range r.Periods {
 				fmt.Fprintf(out, " %14s", f(pr))
 			}
 			fmt.Fprintln(out)
 		}
-		row("sessions", func(pr periodReport) string { return fmt.Sprint(pr.Sessions) })
-		row("tool calls", func(pr periodReport) string { return fmt.Sprint(pr.ToolCalls) })
-		row("tokens", func(pr periodReport) string { return compactCount(pr.Tokens) })
-		row("cost (API-equivalent)", func(pr periodReport) string { return cost.FormatUSD(pr.CostUSD) })
-		row("loops caught", func(pr periodReport) string { return fmt.Sprint(pr.Loops) })
-		row("interventions (real/would)", func(pr periodReport) string {
+		row("sessions", func(pr report.Period) string { return fmt.Sprint(pr.Sessions) })
+		row("tool calls", func(pr report.Period) string { return fmt.Sprint(pr.ToolCalls) })
+		row("tokens", func(pr report.Period) string { return compactCount(pr.Tokens) })
+		row("cost (API-equivalent)", func(pr report.Period) string { return cost.FormatUSD(pr.CostUSD) })
+		row("loops caught", func(pr report.Period) string { return fmt.Sprint(pr.Loops) })
+		row("interventions (real/would)", func(pr report.Period) string {
 			return fmt.Sprintf("%d/%d", pr.Interventions.Real, pr.Interventions.Would)
 		})
-		row("time inside loops (est.)", func(pr periodReport) string {
+		row("recovery rate (real/would)", func(pr report.Period) string {
+			return ratePct(pr.RecoveryReal) + "/" + ratePct(pr.RecoveryWH)
+		})
+		row("time inside loops (est.)", func(pr report.Period) string {
 			return shortDuration(time.Duration(pr.LoopSeconds * float64(time.Second)))
 		})
-		row("cost inside loops (est.)", func(pr periodReport) string { return cost.FormatUSD(pr.LoopCostUSD) })
+		row("cost inside loops (est.)", func(pr report.Period) string { return cost.FormatUSD(pr.LoopCostUSD) })
 		if last := r.Periods[len(r.Periods)-1]; last.UnpricedTokens > 0 {
 			fmt.Fprintf(out, "Not priced (30 days): %s tokens of %s; their cost is unknown (add them to pricing.yaml).\n",
 				compactCount(last.UnpricedTokens), strings.Join(last.UnknownModels, ", "))
@@ -329,7 +159,9 @@ func printSummaryReport(out io.Writer, r summaryReport, p *cost.Pricing) {
 	}
 }
 
-func printEstimates(out io.Writer, e *estimateReport) {
+func ratePct(r *float64) string { return report.RatePct(r) }
+
+func printEstimates(out io.Writer, e *report.EstimateReport) {
 	if len(e.Top) == 0 {
 		fmt.Fprintln(out, "  no tool calls")
 		return
@@ -354,319 +186,24 @@ func printEstimates(out io.Writer, e *estimateReport) {
 }
 
 // compactCount shows a count as 950, 12.3k, 4.56M.
-func compactCount(n int64) string {
-	switch {
-	case n >= 1_000_000_000:
-		return fmt.Sprintf("%.2fG", float64(n)/1e9)
-	case n >= 1_000_000:
-		return fmt.Sprintf("%.2fM", float64(n)/1e6)
-	case n >= 10_000:
-		return fmt.Sprintf("%.1fk", float64(n)/1e3)
-	}
-	return fmt.Sprint(n)
-}
+func compactCount(n int64) string { return report.CompactCount(n) }
 
-// sessionReport is `loopguard report <session>`.
-type sessionReport struct {
-	Basis     string         `json:"basis"`
-	SessionID string         `json:"session_id"`
-	Project   string         `json:"project"`
-	Live      bool           `json:"live_data"` // LoopGuard's database has the session (real interventions)
-	Totals    sessionTotals  `json:"totals"`
-	Streams   []streamReport `json:"streams"`
-	Estimates estimateReport `json:"estimates"`
-}
-
-type sessionTotals struct {
-	Calls          int        `json:"tool_calls"`
-	Failures       int        `json:"failures"`
-	Turns          int        `json:"turns"`
-	Tokens         int64      `json:"tokens"`
-	Usage          cost.Usage `json:"usage"`
-	CostUSD        float64    `json:"cost_usd"`
-	UnpricedTokens int64      `json:"unpriced_tokens"`
-	UnknownModels  []string   `json:"unknown_models"`
-	Loops          int        `json:"loops"`
-	LoopSeconds    float64    `json:"loop_seconds"`
-	LoopCostUSD    float64    `json:"loop_cost_usd"`
-}
-
-type streamReport struct {
-	Stream   string       `json:"stream"` // "main" or the subagent id
-	Calls    int          `json:"tool_calls"`
-	Failures int          `json:"failures"`
-	Tokens   int64        `json:"tokens"`
-	CostUSD  float64      `json:"cost_usd"`
-	Turns    []turnReport `json:"turns"`
-	// Other are LoopGuard's actions not tied to a loop found here (budget
-	// limits, the user's stop, loops under other thresholds).
-	Other []actionReport `json:"other_actions,omitempty"`
-}
-
-type turnReport struct {
-	Turn           int          `json:"turn"` // 0: before the first prompt
-	StartSeconds   float64      `json:"start_seconds"`
-	Calls          int          `json:"tool_calls"`
-	Failures       int          `json:"failures"`
-	Tokens         int64        `json:"tokens"`
-	CostUSD        float64      `json:"cost_usd"`
-	UnpricedTokens int64        `json:"unpriced_tokens,omitempty"`
-	Groups         []callGroup  `json:"calls"`
-	Loops          []loopReport `json:"loops"`
-}
-
-// callGroup is a run of consecutive calls of one family or tool + target.
-type callGroup struct {
-	From   int    `json:"from_call"`
-	To     int    `json:"to_call"`
-	Label  string `json:"label"`
-	Count  int    `json:"count"`
-	Failed int    `json:"failed"`
-}
-
-type loopReport struct {
-	Detector     string         `json:"detector"`
-	LoopKey      string         `json:"loop_key"`
-	Subject      string         `json:"subject"`
-	FirstCall    int            `json:"first_call"`
-	LastCall     int            `json:"last_call"`
-	Count        int            `json:"count"`
-	StartSeconds float64        `json:"start_seconds"`
-	EndSeconds   float64        `json:"end_seconds"`
-	CostUSD      *float64       `json:"cost_usd,omitempty"`
-	Actions      []actionReport `json:"actions"`
-	Outcome      string         `json:"outcome"`
-}
-
-// actionReport is one thing LoopGuard did (or would have done) about a
-// loop: from the database when it watched the session live ("real" or
-// "would"), else from the replay ("replay").
-type actionReport struct {
-	Action   string  `json:"action"`
-	Kind     string  `json:"kind"` // real | would | replay
-	Call     int     `json:"call,omitempty"`
-	AtSecond float64 `json:"at_seconds,omitempty"`
-	Detector string  `json:"detector,omitempty"`
-	Outcome  string  `json:"outcome,omitempty"`
-	Reason   string  `json:"reason,omitempty"`
-}
-
-func buildSessionReport(dir, path, prefix string, pricing *cost.Pricing) (*sessionReport, error) {
-	streams, err := replay.Discover(path, replay.Filter{Session: prefix})
-	if err != nil {
-		return nil, fmt.Errorf("reading transcripts: %w", err)
-	}
-	ids := map[string]bool{}
-	for _, s := range streams {
-		ids[s.SessionID] = true
-	}
-	switch len(ids) {
-	case 0:
-		return nil, fmt.Errorf("no transcript for a session starting with %q under %s", prefix, path)
-	case 1:
-	default:
-		return nil, fmt.Errorf("%q matches %d sessions (%s); give more of the id", prefix, len(ids), strings.Join(sortedKeys(ids), ", "))
-	}
-	res := replay.Run(streams, replay.Options{Thresholds: config.Default(), Timeline: true, Pricing: pricing})
-	if len(res.Errors) > 0 {
-		return nil, errors.New(res.Errors[0])
-	}
-	r := &sessionReport{Basis: replay.CostBasis, SessionID: streams[0].SessionID, Project: streams[0].Project}
-
-	// What LoopGuard did live, if it watched the session.
-	live := map[string][]store.Intervention{} // by stream key ("" main, else the agent id)
+// buildSessionReport is `loopguard report <session>`: the timeline from
+// the transcript, with what LoopGuard did live from the database.
+func buildSessionReport(dir, path, prefix string, pricing *cost.Pricing) (*report.Session, error) {
+	var st *store.Store
 	if db := filepath.Join(dir, home.DBFile); fileExists(db) {
-		if st, err := store.Open(db); err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			rows, _ := st.SessionStreams(ctx, r.SessionID)
-			for _, s := range rows {
-				r.Live = true
-				_, agent, _ := strings.Cut(s.Key[strings.IndexByte(s.Key, ':')+1:], "/")
-				ivs, _ := st.Interventions(ctx, s.Key, 10000)
-				live[agent] = ivs
-			}
-			cancel()
-			st.Close()
+		if s, err := store.Open(db); err == nil {
+			st = s
+			defer st.Close()
 		}
 	}
-
-	var t0 time.Time
-	for _, tl := range res.Timelines {
-		if len(tl) > 0 && (t0.IsZero() || tl[0].At.Before(t0)) {
-			t0 = tl[0].At
-		}
-	}
-	since := func(t time.Time) float64 {
-		if t.IsZero() || t0.IsZero() {
-			return 0
-		}
-		return t.Sub(t0).Seconds()
-	}
-	unknown := map[string]bool{}
-	sort.Slice(streams, func(i, j int) bool { return streams[i].AgentID < streams[j].AgentID }) // main first
-	for _, st := range streams {
-		key := st.Key()
-		sc := res.Costs.Streams[key]
-		if sc == nil {
-			continue
-		}
-		sum := sc.Summary
-		sr := streamReport{Stream: "main", Tokens: sum.Usage.Total(), CostUSD: sum.CostUSD, Turns: []turnReport{}}
-		if st.AgentID != "" {
-			sr.Stream = st.AgentID
-		}
-		for _, m := range sum.Models {
-			if !m.Priced && m.Model != cost.SyntheticModel {
-				unknown[m.Model] = true
-			}
-		}
-		turns := map[int]*turnReport{}
-		turnOf := func(n int) *turnReport {
-			t := turns[n]
-			if t == nil {
-				t = &turnReport{Turn: n, Groups: []callGroup{}, Loops: []loopReport{}}
-				turns[n] = t
-			}
-			return t
-		}
-		for _, tc := range sum.Turns {
-			t := turnOf(tc.Turn)
-			t.Tokens, t.CostUSD, t.UnpricedTokens = tc.Usage.Total(), tc.CostUSD, tc.Unpriced
-		}
-		callTurn := map[int]int{}
-		for _, c := range res.Timelines[key] {
-			t := turnOf(c.Turn)
-			callTurn[c.N] = c.Turn
-			if t.Calls == 0 {
-				t.StartSeconds = since(c.At)
-			}
-			t.Calls++
-			sr.Calls++
-			label := callLabel(c)
-			g := len(t.Groups) - 1
-			if g < 0 || t.Groups[g].Label != label || t.Groups[g].To != c.N-1 {
-				t.Groups = append(t.Groups, callGroup{From: c.N, Label: label})
-				g++
-			}
-			t.Groups[g].To = c.N
-			t.Groups[g].Count++
-			if c.Failed {
-				t.Groups[g].Failed++
-				t.Failures++
-				sr.Failures++
-			}
-		}
-		ivs := live[st.AgentID]
-		used := map[int]bool{}
-		for _, l := range res.Loops {
-			if l.SessionID != st.SessionID || l.AgentID != st.AgentID {
-				continue
-			}
-			lr := loopReport{Detector: l.Detector, LoopKey: l.LoopKey, Subject: reportSubject(l), FirstCall: l.FirstCall,
-				LastCall: l.LastCall, Count: l.Count, StartSeconds: since(l.StartedAt), EndSeconds: since(l.EndedAt),
-				CostUSD: l.CostUSD, Actions: []actionReport{}}
-			if r.Live {
-				for i, iv := range ivs {
-					if iv.LoopKey == l.LoopKey && !used[i] {
-						used[i] = true
-						lr.Actions = append(lr.Actions, liveAction(iv, since))
-					}
-				}
-			} else {
-				for _, w := range l.WouldHave {
-					lr.Actions = append(lr.Actions, actionReport{Action: w.Action, Kind: "replay", Call: w.Call})
-				}
-			}
-			lr.Outcome = loopOutcome(lr, l)
-			turnOf(callTurn[l.FirstCall]).Loops = append(turnOf(callTurn[l.FirstCall]).Loops, lr)
-			r.Totals.Loops++
-			r.Totals.LoopSeconds += l.DurationSeconds
-		}
-		r.Totals.LoopCostUSD += sc.WastedUSD
-		for i, iv := range ivs {
-			if !used[i] {
-				sr.Other = append(sr.Other, liveAction(iv, since))
-			}
-		}
-		for _, t := range turns {
-			sr.Turns = append(sr.Turns, *t)
-		}
-		sort.Slice(sr.Turns, func(i, j int) bool { return sr.Turns[i].Turn < sr.Turns[j].Turn })
-		r.Streams = append(r.Streams, sr)
-		r.Totals.Calls += sr.Calls
-		r.Totals.Failures += sr.Failures
-		r.Totals.Usage = r.Totals.Usage.Add(sum.Usage)
-		r.Totals.CostUSD += sum.CostUSD
-		r.Totals.UnpricedTokens += sum.Unpriced.Total()
-		if st.AgentID == "" {
-			r.Totals.Turns = len(sr.Turns)
-		}
-	}
-	r.Totals.Tokens = r.Totals.Usage.Total()
-	r.Totals.UnknownModels = sortedKeys(unknown)
-	top, largest := res.Costs.Estimates(topEstimates, nil)
-	r.Estimates = estimateReport{Window: "this session", Streams: len(streams), CostUSD: res.Costs.CostUSD, Top: top, Largest: largest}
-	return r, nil
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return report.BuildSession(ctx, st, path, prefix, pricing)
 }
 
-// callLabel names a call for the timeline: the command family, or the
-// tool and its file (relative, redacted).
-func callLabel(c replay.Call) string {
-	switch {
-	case c.Family != "" && c.Tool == "bash":
-		return "bash: " + c.Family
-	case c.File != "":
-		return c.Tool + " " + redact.String(c.File)
-	}
-	return c.Tool
-}
-
-func reportSubject(l *replay.Loop) string {
-	switch {
-	case l.File != "":
-		return redact.String(l.File)
-	case l.Family != "":
-		return "`" + l.Family + "`"
-	}
-	return l.LoopKey
-}
-
-func liveAction(iv store.Intervention, since func(time.Time) float64) actionReport {
-	kind := "would"
-	if iv.Mode == store.ModeEnforce {
-		kind = "real"
-	}
-	outcome := iv.Outcome
-	if outcome == "" {
-		outcome = "pending"
-	}
-	return actionReport{Action: iv.Action, Kind: kind, AtSecond: since(iv.TS), Detector: iv.Detector, Outcome: outcome,
-		Reason: clip(firstLine(redact.String(iv.Reason)), 120)}
-}
-
-// loopOutcome sums up how a loop ended: the outcome LoopGuard recorded
-// for its last action, or, from the replay alone, "halted" / "went on".
-func loopOutcome(lr loopReport, l *replay.Loop) string {
-	for i := len(lr.Actions) - 1; i >= 0; i-- {
-		if o := lr.Actions[i].Outcome; o != "" && o != "pending" {
-			return o
-		}
-	}
-	for _, w := range l.WouldHave {
-		if w.Action == "halt" {
-			return "would have halted"
-		}
-	}
-	switch {
-	case len(lr.Actions) == 0:
-		return "no action"
-	case lr.Actions[0].Kind == "replay":
-		return "not tracked (replay)"
-	}
-	return "pending"
-}
-
-func printSessionReport(out io.Writer, r *sessionReport, p *cost.Pricing) {
+func printSessionReport(out io.Writer, r *report.Session, p *cost.Pricing) {
 	t := r.Totals
 	fmt.Fprintf(out, "LoopGuard report: session %s (%s)\n", r.SessionID, r.Project)
 	src := "replayed from the transcript (LoopGuard did not watch it live)"
@@ -728,7 +265,7 @@ func printSessionReport(out io.Writer, r *sessionReport, p *cost.Pricing) {
 	printEstimates(out, &r.Estimates)
 }
 
-func actionsText(as []actionReport) string {
+func actionsText(as []report.Action) string {
 	if len(as) == 0 {
 		return "nothing (cooldown or per-turn nudge limit)"
 	}
@@ -746,14 +283,4 @@ func actionsText(as []actionReport) string {
 
 // offset formats seconds since the session's first call: 0:42, 12:05,
 // 1:02:03.
-func offset(sec float64) string {
-	d := time.Duration(sec * float64(time.Second)).Round(time.Second)
-	if d < 0 {
-		d = 0
-	}
-	h, m, s := int(d.Hours()), int(d.Minutes())%60, int(d.Seconds())%60
-	if h > 0 {
-		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
-	}
-	return fmt.Sprintf("%d:%02d", m, s)
-}
+func offset(sec float64) string { return report.Offset(sec) }

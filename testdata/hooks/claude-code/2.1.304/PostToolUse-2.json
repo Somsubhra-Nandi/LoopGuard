@@ -1,0 +1,27 @@
+{
+  "cwd": "<HOME>\\Desktop\\project",
+  "duration_ms": 62,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "auto",
+  "prompt_id": "2360e5ac-c081-486f-bb14-d5325ddbc930",
+  "scratchpad_dir": "<HOME>\\AppData\\Local\\Temp\\claude\\<HOME>-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9\\scratchpad",
+  "session_id": "f9c69d47-a0fb-434f-848c-d6f16f954bf9",
+  "tool_input": {
+    "content": "<str:217>",
+    "file_path": "<str:35>"
+  },
+  "tool_name": "Write",
+  "tool_response": {
+    "content": "<str:217>",
+    "filePath": "<str:35>",
+    "originalFile": null,
+    "structuredPatch": [],
+    "type": "<str:6>",
+    "userModified": false
+  },
+  "tool_use_id": "toolu_01PDf6tPtam9YTPjGTim4Azm",
+  "transcript_path": "<HOME>\\.claude\\projects\\<HOME>-Desktop-project\\f9c69d47-a0fb-434f-848c-d6f16f954bf9.jsonl"
+}
