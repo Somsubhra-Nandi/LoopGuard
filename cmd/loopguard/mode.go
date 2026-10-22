@@ -12,6 +12,7 @@ import (
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
+	"github.com/Somsubhra-Nandi/loopguard/internal/pathid"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
 
@@ -82,23 +83,24 @@ func fileExists(p string) bool {
 
 // printMode prints the level, why, and what changes it.
 func printMode(out io.Writer, r modeReport) {
+	shown := pathid.Tilde
 	fmt.Fprintf(out, "Level: %s (%s)\n", r.Mode.Mode, r.Mode.Why)
 	switch {
 	case r.Config.Error != "":
-		fmt.Fprintf(out, "  %s is invalid, so the defaults are used: %s\n", r.Config.Path, r.Config.Error)
+		fmt.Fprintf(out, "  %s is invalid, so the defaults are used: %s\n", shown(r.Config.Path), r.Config.Error)
 	case !r.Config.Exists:
-		fmt.Fprintf(out, "  config: %s (not created yet)\n", r.Config.Path)
+		fmt.Fprintf(out, "  config: %s (not created yet)\n", shown(r.Config.Path))
 	default:
-		fmt.Fprintf(out, "  config: %s\n", r.Config.Path)
+		fmt.Fprintf(out, "  config: %s\n", shown(r.Config.Path))
 	}
 	if rp := r.Repo; rp != nil {
 		switch {
 		case rp.File.Error != "":
-			fmt.Fprintf(out, "  this repo: %s is invalid and ignored: %s\n", rp.File.Path, rp.File.Error)
+			fmt.Fprintf(out, "  this repo: %s is invalid and ignored: %s\n", shown(rp.File.Path), rp.File.Error)
 		case rp.Mode != r.Mode:
 			fmt.Fprintf(out, "  this repo: %s (%s)\n", rp.Mode.Mode, rp.Mode.Why)
 		default:
-			fmt.Fprintf(out, "  this repo: %s applies\n", rp.File.Path)
+			fmt.Fprintf(out, "  this repo: %s applies\n", shown(rp.File.Path))
 		}
 		for _, n := range rp.Notes {
 			fmt.Fprintf(out, "    %s\n", n)

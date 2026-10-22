@@ -10,6 +10,7 @@ import (
 
 	"github.com/Somsubhra-Nandi/loopguard/internal/config"
 	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
+	"github.com/Somsubhra-Nandi/loopguard/internal/pathid"
 	"github.com/Somsubhra-Nandi/loopguard/internal/redact"
 	"github.com/Somsubhra-Nandi/loopguard/internal/replay"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
@@ -126,7 +127,7 @@ func BuildSession(ctx context.Context, st *store.Store, path, prefix string, pri
 	}
 	switch len(ids) {
 	case 0:
-		return nil, fmt.Errorf("%w for a session starting with %q under %s", ErrNoTranscript, prefix, path)
+		return nil, fmt.Errorf("%w for a session starting with %q under %s", ErrNoTranscript, prefix, pathid.Tilde(path))
 	case 1:
 	default:
 		return nil, fmt.Errorf("%q matches %d sessions (%s); give more of the id", prefix, len(ids), strings.Join(SortedKeys(ids), ", "))

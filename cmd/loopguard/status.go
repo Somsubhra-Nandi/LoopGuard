@@ -17,6 +17,7 @@ import (
 	"github.com/Somsubhra-Nandi/loopguard/internal/cost"
 	"github.com/Somsubhra-Nandi/loopguard/internal/daemon"
 	"github.com/Somsubhra-Nandi/loopguard/internal/home"
+	"github.com/Somsubhra-Nandi/loopguard/internal/pathid"
 	"github.com/Somsubhra-Nandi/loopguard/internal/report"
 	"github.com/Somsubhra-Nandi/loopguard/internal/store"
 )
@@ -177,7 +178,7 @@ func printStatus(out io.Writer, r statusReport, now time.Time) {
 			fmt.Fprintln(out, "  none")
 		}
 		for _, s := range r.Sessions {
-			name := s.Cwd
+			name := pathid.Tilde(s.Cwd)
 			if name == "" {
 				name = s.SessionID
 			}
