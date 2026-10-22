@@ -26,10 +26,23 @@ type SessionRow struct {
 	Tokens         int64     `json:"tokens"`
 	CostUSD        float64   `json:"cost_usd"`
 	UnpricedTokens int64     `json:"unpriced_tokens,omitempty"`
+	// ActiveSeconds is the time the session was active (ActiveDuration).
+	ActiveSeconds float64 `json:"active_seconds"`
+	// Transcript is the main stream's transcript, as the hooks gave it.
+	Transcript string `json:"transcript,omitempty"`
+	// UsageIncomplete: the transcript is gone and LoopGuard never read it,
+	// so the usage (and cost) shown lacks what it held.
+	UsageIncomplete bool `json:"usage_incomplete,omitempty"`
 }
 
-// Duration is the time from the session's first event to its latest.
+// Duration is the wall-clock time from the session's first event to its
+// latest.
 func (r SessionRow) Duration() time.Duration { return r.LastSeenAt.Sub(r.StartedAt) }
+
+// Active is the time the session was active (see ActiveDuration).
+func (r SessionRow) Active() time.Duration {
+	return time.Duration(r.ActiveSeconds * float64(time.Second))
+}
 
 // SessionFilter selects sessions for ListSessions.
 type SessionFilter struct {
@@ -91,6 +104,7 @@ func sessionRows(ctx context.Context, st *store.Store, pricing *cost.Pricing, st
 			r.Keys = append([]string{s.Key}, r.Keys...)
 			r.Cwd, r.Repo = s.Cwd, s.Repo
 			r.Ended = !s.EndedAt.IsZero()
+			r.Transcript = s.Transcript
 		} else {
 			r.Keys = append(r.Keys, s.Key)
 		}
@@ -134,13 +148,45 @@ func sessionRows(ctx context.Context, st *store.Store, pricing *cost.Pricing, st
 	if err != nil {
 		return nil, err
 	}
+	// Events, for the active time: the first and last hook events, the
+	// tool calls, and the model calls.
+	times := make([][]time.Time, len(out))
+	var keys []string
+	keyRow := map[string]int{}
+	for i, r := range out {
+		times[i] = []time.Time{r.StartedAt, r.LastSeenAt}
+		for _, k := range r.Keys {
+			keys = append(keys, k)
+			keyRow[k] = i
+		}
+	}
 	for i, p := range Price(rows, pricing) {
-		r := &out[idx[rows[i].SessionID]]
+		ri := idx[rows[i].SessionID]
+		r := &out[ri]
 		r.Tokens += p.Usage.Total()
 		if p.Priced {
 			r.CostUSD += p.USD
 		} else {
 			r.UnpricedTokens += p.Usage.Total()
+		}
+		times[ri] = append(times[ri], rows[i].TS)
+	}
+	calls, err := st.CallTimes(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	for k, ts := range calls {
+		times[keyRow[k]] = append(times[keyRow[k]], ts...)
+	}
+	for i := range out {
+		r := &out[i]
+		r.ActiveSeconds = ActiveDuration(times[i]).Seconds()
+		if r.Transcript != "" && !fileExists(r.Transcript) {
+			read, err := st.HasTranscriptOffset(ctx, r.Transcript)
+			if err != nil {
+				return nil, err
+			}
+			r.UsageIncomplete = !read
 		}
 	}
 	spans, err := st.LoopSpans(ctx, f.Since, nudgeAt)

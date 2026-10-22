@@ -19,7 +19,9 @@
     "unknown_models": [],
     "loops": 1,
     "loop_seconds": 176,
-    "loop_cost_usd": 0.045108
+    "loop_cost_usd": 0.045108,
+    "active_seconds": 249,
+    "wall_seconds": 249
   },
   "streams": [
     {

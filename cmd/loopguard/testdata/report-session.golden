@@ -2,6 +2,7 @@ LoopGuard report: session 5e551011-0000-4000-8000-000000000001 (C--Users-dev-wor
 replayed from the transcript (LoopGuard did not watch it live); costs are API-equivalent
 
   Turns 2, tool calls 12 (5 failed), loops 1
+  Active 4m (4m wall clock; gaps over 30m count as idle)
   Tokens 240.6k: input 36, output 600, cache write 0, cache read 240.0k
   Cost $0.06 API-equivalent; inside loops $0.05 over 2m
 

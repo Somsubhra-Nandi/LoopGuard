@@ -330,3 +330,44 @@ func (s *Store) InterventionKeys(ctx context.Context, detector string, since tim
 	}
 	return out, rows.Err()
 }
+
+// CallTimes returns the times of the calls of the given streams, by
+// session key, oldest first.
+func (s *Store) CallTimes(ctx context.Context, keys []string) (map[string][]time.Time, error) {
+	out := map[string][]time.Time{}
+	for len(keys) > 0 {
+		n := min(len(keys), 500)
+		batch := keys[:n]
+		keys = keys[n:]
+		args := make([]any, len(batch))
+		for i, k := range batch {
+			args[i] = k
+		}
+		rows, err := s.db.QueryContext(ctx, `SELECT session_key, ts FROM calls WHERE session_key IN (`+
+			strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")+`) ORDER BY ts`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var k string
+			var ts int64
+			if err := rows.Scan(&k, &ts); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[k] = append(out[k], fromMS(ts))
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// HasTranscriptOffset reports whether path has a stored offset (LoopGuard
+// read it, live or by backfill).
+func (s *Store) HasTranscriptOffset(ctx context.Context, path string) (bool, error) {
+	_, ok, err := s.GetTranscriptOffset(ctx, path)
+	return ok, err
+}

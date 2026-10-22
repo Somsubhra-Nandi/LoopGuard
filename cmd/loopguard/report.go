@@ -212,6 +212,8 @@ func printSessionReport(out io.Writer, r *report.Session, p *cost.Pricing) {
 	}
 	fmt.Fprintf(out, "%s; costs are API-equivalent\n\n", src)
 	fmt.Fprintf(out, "  Turns %d, tool calls %d (%d failed), loops %d\n", t.Turns, t.Calls, t.Failures, t.Loops)
+	fmt.Fprintf(out, "  Active %s (%s wall clock; gaps over %s count as idle)\n", shortDuration(time.Duration(t.ActiveSeconds*float64(time.Second))),
+		shortDuration(time.Duration(t.WallSeconds*float64(time.Second))), shortDuration(report.IdleGap))
 	fmt.Fprintf(out, "  Tokens %s: input %s, output %s, cache write %s, cache read %s\n", compactCount(t.Tokens), compactCount(t.Usage.Input),
 		compactCount(t.Usage.Output), compactCount(t.Usage.CacheWrite), compactCount(t.Usage.CacheRead))
 	fmt.Fprintf(out, "  Cost %s API-equivalent; inside loops %s over %s\n", p.Format(t.CostUSD), p.Format(t.LoopCostUSD),

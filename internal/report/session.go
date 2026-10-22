@@ -39,6 +39,11 @@ type SessionTotals struct {
 	Loops          int        `json:"loops"`
 	LoopSeconds    float64    `json:"loop_seconds"`
 	LoopCostUSD    float64    `json:"loop_cost_usd"`
+	// ActiveSeconds is the time the session was active: the gaps between
+	// its tool calls and model calls up to IdleGap (ActiveDuration);
+	// WallSeconds the wall-clock time from the first to the last.
+	ActiveSeconds float64 `json:"active_seconds"`
+	WallSeconds   float64 `json:"wall_seconds"`
 }
 
 // Stream is the main session or one subagent.
@@ -255,6 +260,19 @@ func BuildSession(ctx context.Context, st *store.Store, path, prefix string, pri
 		if st.AgentID == "" {
 			r.Totals.Turns = len(sr.Turns)
 		}
+	}
+	var times []time.Time
+	for _, tl := range res.Timelines {
+		for _, c := range tl {
+			times = append(times, c.At)
+		}
+	}
+	for _, sc := range res.Costs.Streams {
+		times = append(times, sc.Summary.MessageTimes...)
+	}
+	r.Totals.ActiveSeconds = ActiveDuration(times).Seconds()
+	if first, last := span(times); !first.IsZero() {
+		r.Totals.WallSeconds = last.Sub(first).Seconds()
 	}
 	r.Totals.Tokens = r.Totals.Usage.Total()
 	r.Totals.UnknownModels = SortedKeys(unknown)
