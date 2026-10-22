@@ -212,6 +212,7 @@ func Run(ctx context.Context, o Options) error {
 	go d.janitor(ctx)
 	if o.TailEvery >= 0 {
 		go d.tailLoop(ctx, cmp.Or(o.TailEvery, DefaultTailEvery))
+		go d.mgr.tails.backfill(ctx, transcriptsDir(o.Transcripts))
 	}
 	select {
 	case <-ctx.Done():

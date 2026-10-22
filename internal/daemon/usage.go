@@ -3,9 +3,6 @@ package daemon
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -255,6 +252,22 @@ func (b *usageBook) addUsage(sessionID, key, repo string, ts time.Time, delta co
 	}
 }
 
+// addBackfill records a message read by the backfill: for the session only
+// if the book already counts it (else its totals load from the store when
+// it is next seen, the message included), and for the day if it is from
+// today.
+func (b *usageBook) addBackfill(sessionID, key, repo string, ts time.Time, delta cost.Usage, usd float64, priced bool, now time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rollover(now)
+	if s := b.sessions[sessionID]; s != nil {
+		s.add(key, delta, usd, priced)
+	}
+	if !ts.IsZero() && !ts.Before(b.dayStart) {
+		b.addDay(repo, delta, usd, priced)
+	}
+}
+
 // event records a hook event of a session at at: wall time, and a
 // completed tool call if call.
 func (b *usageBook) event(sessionID, key, repo string, at time.Time, call bool) {
@@ -399,161 +412,4 @@ func messageOf(r store.Usage) cost.Message {
 
 func usageOf(r store.Usage) cost.Usage {
 	return cost.Usage{Input: r.Input, Output: r.Output, CacheWrite: r.CacheWrite, CacheRead: r.CacheRead, CacheWrite1h: r.CacheWrite1h}
-}
-
-// tails polls the transcripts of active sessions: the main transcript
-// (the hook's transcript_path) and the subagent transcripts next to it
-// (<session>/subagents/agent-<id>.jsonl), each from its stored offset.
-type tails struct {
-	m *Manager
-
-	mu     sync.Mutex
-	groups map[string]*tailGroup // by session id
-}
-
-type tailGroup struct {
-	sessionID string
-	agent     string
-	main      string
-	repo      string
-	last      time.Time // latest hook event
-	ended     bool
-	streams   map[string]*tailStream // by path
-}
-
-type tailStream struct {
-	key    string
-	t      cost.Tailer
-	ledger *cost.Ledger
-}
-
-// register starts (or keeps) tailing a session's transcripts.
-func (ts *tails) register(sessionID, agent, transcript, repo string, at time.Time, ended bool) {
-	if transcript == "" || sessionID == doctorSessionID {
-		return
-	}
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	if ts.groups == nil {
-		ts.groups = map[string]*tailGroup{}
-	}
-	g := ts.groups[sessionID]
-	if g == nil {
-		g = &tailGroup{sessionID: sessionID, agent: agent, streams: map[string]*tailStream{}}
-		ts.groups[sessionID] = g
-	}
-	g.main = transcript
-	if repo != "" {
-		g.repo = repo
-	}
-	if at.After(g.last) {
-		g.last = at
-	}
-	g.ended = ended
-}
-
-// pollAll polls every active session's transcripts once, and drops
-// sessions that ended or went idle (after a last poll).
-func (ts *tails) pollAll(now time.Time) {
-	ts.mu.Lock()
-	var groups []tailJob
-	for id, g := range ts.groups {
-		groups = append(groups, tailJob{g, g.main, g.repo})
-		if g.ended || now.Sub(g.last) > tailIdle {
-			delete(ts.groups, id)
-		}
-	}
-	ts.mu.Unlock()
-	sort.Slice(groups, func(i, j int) bool { return groups[i].g.sessionID < groups[j].g.sessionID })
-	for _, j := range groups {
-		ts.poll(j, now)
-	}
-}
-
-// tailJob is one session to poll, with the fields register may change
-// copied under the lock. Only the polling goroutine touches g.streams.
-type tailJob struct {
-	g          *tailGroup
-	main, repo string
-}
-
-func (ts *tails) poll(j tailJob, now time.Time) {
-	m, g := ts.m, j.g
-	paths := map[string]string{j.main: g.agent + ":" + g.sessionID}
-	dir := strings.TrimSuffix(j.main, filepath.Ext(j.main))
-	subs, _ := filepath.Glob(filepath.Join(dir, "subagents", "agent-*.jsonl"))
-	for _, s := range subs {
-		agentID := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(s), "agent-"), ".jsonl")
-		paths[s] = g.agent + ":" + g.sessionID + "/" + agentID
-	}
-	pricing := m.book.pricing.Get()
-	for path, key := range paths {
-		s := g.streams[path]
-		if s == nil {
-			s = ts.open(path, key)
-			g.streams[path] = s
-		}
-		before := s.t.At
-		_, err := s.t.Poll(func(line []byte) {
-			msg, ok := cost.ParseLine(line)
-			if !ok {
-				return
-			}
-			old := s.ledger.Messages()
-			var prev cost.Message
-			if i := s.ledger.Index(msg.ID); i >= 0 {
-				prev = old[i]
-			}
-			cur, delta := s.ledger.Add(msg)
-			if delta.IsZero() && prev.ID != "" {
-				return // a repeated line
-			}
-			usd, priced := pricing.Cost(cur)
-			if prev.ID != "" {
-				was, _ := pricing.Cost(prev)
-				usd -= was
-			}
-			m.book.addUsage(g.sessionID, key, j.repo, cur.TS, delta, usd, priced, now)
-			row := store.Usage{SessionKey: key, SessionID: g.sessionID, Repo: j.repo, MessageID: cur.ID, TS: cur.TS, Model: cur.Model,
-				Input: cur.Usage.Input, Output: cur.Usage.Output, CacheRead: cur.Usage.CacheRead, CacheWrite: cur.Usage.CacheWrite,
-				CacheWrite1h: cur.Usage.CacheWrite1h, Speed: cur.Speed, Geo: cur.Geo}
-			if total, ok := pricing.Cost(cur); ok {
-				row.CostUSD = &total
-			}
-			m.w.Enqueue(row)
-		})
-		if err != nil {
-			m.log.Warn("reading transcript", "path", path, "err", err)
-			continue
-		}
-		if s.t.At != before {
-			m.w.Enqueue(store.TranscriptOffset{Path: path, Offset: s.t.At.Offset, Fingerprint: s.t.At.Fingerprint})
-		}
-	}
-}
-
-// open starts tailing one transcript from its stored offset, with the
-// messages already stored for the stream in the ledger, so a message whose
-// lines straddle a restart is counted once.
-func (ts *tails) open(path, key string) *tailStream {
-	m := ts.m
-	s := &tailStream{key: key, t: cost.Tailer{Path: path}, ledger: cost.NewLedger()}
-	if m.st == nil {
-		return s
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if o, ok, err := m.st.GetTranscriptOffset(ctx, path); err != nil {
-		m.log.Warn("reading transcript offset", "path", path, "err", err)
-	} else if ok {
-		s.t.At = cost.Offset{Offset: o.Offset, Fingerprint: o.Fingerprint}
-	}
-	rows, err := m.st.UsageRows(ctx, store.UsageFilter{SessionKey: key})
-	if err != nil {
-		m.log.Warn("reading stored usage", "stream", key, "err", err)
-	}
-	for _, r := range rows {
-		s.ledger.Add(messageOf(r))
-	}
-	return s
 }
